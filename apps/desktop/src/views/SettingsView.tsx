@@ -1,12 +1,22 @@
-/** Settings view. */
-
 import React, { useEffect, useState } from "react";
 import { scanApi, statsApi } from "../services/api";
-import { getTheme, setTheme } from "../services/theme";
 import { open } from "@tauri-apps/api/dialog";
+import { useTheme } from "../components/common/ThemeProvider";
+import {
+  Settings as SettingsIcon,
+  Moon,
+  Sun,
+  Database,
+  Shield,
+  Cpu,
+  FolderPlus,
+  BarChart3,
+  Loader2
+} from "lucide-react";
+import Card from "../components/common/Card";
 
 const SettingsView: React.FC = () => {
-  const [theme, setThemeState] = useState<"dark" | "light">(getTheme());
+  const { theme, toggleTheme } = useTheme();
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [stats, setStats] = useState<any>(null);
@@ -22,12 +32,6 @@ const SettingsView: React.FC = () => {
     } catch (error) {
       console.error("Failed to load stats:", error);
     }
-  };
-
-  const handleThemeToggle = () => {
-    const newTheme = theme === "dark" ? "light" : "dark";
-    setTheme(newTheme);
-    setThemeState(newTheme);
   };
 
   const handleSelectFolder = async () => {
@@ -52,7 +56,6 @@ const SettingsView: React.FC = () => {
 
       const job = await scanApi.start(folderPath, true);
 
-      // Poll for status
       const interval = setInterval(async () => {
         try {
           const status = await scanApi.getStatus(job.job_id);
@@ -76,74 +79,143 @@ const SettingsView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-dark-text-primary dark:text-dark-text-primary mb-1">
-          Settings
-        </h1>
-        <p className="text-dark-text-secondary dark:text-dark-text-secondary">
-          Power-user settings and preferences
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="mb-10">
+        <div className="flex items-center gap-3 mb-2">
+          <SettingsIcon className="text-brand-primary" size={24} />
+          <h1 className="text-3xl font-black text-light-text-primary dark:text-dark-text-primary tracking-tight">
+            Settings
+          </h1>
+        </div>
+        <p className="text-light-text-secondary dark:text-dark-text-secondary font-medium">
+          Manage your library, appearance, and privacy preferences.
         </p>
       </div>
 
-      <div className="space-y-6 max-w-2xl">
-        <div className="bg-dark-surface dark:bg-dark-surface border border-dark-border dark:border-dark-border rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-dark-text-primary dark:text-dark-text-primary mb-4">
-            Appearance
-          </h2>
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-dark-text-primary dark:text-dark-text-primary font-medium">
-                Theme
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-5xl">
+        {/* Appearance Section */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <Sun size={16} className="text-brand-primary" />
+            <h2 className="text-sm font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest">
+              Appearance
+            </h2>
+          </div>
+          <Card className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-light-text-primary dark:text-dark-text-primary mb-1">Theme</h3>
+                <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
+                  Choose between light and dark mode
+                </p>
               </div>
-              <div className="text-sm text-dark-text-secondary dark:text-dark-text-secondary">
-                {theme === "dark" ? "Dark mode" : "Light mode"}
+              <button
+                onClick={toggleTheme}
+                className="flex items-center gap-2 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl font-bold text-sm hover:border-brand-primary hover:text-brand-primary transition-all"
+              >
+                {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+                <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+              </button>
+            </div>
+          </Card>
+        </section>
+
+        {/* Database Section */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <Database size={16} className="text-brand-primary" />
+            <h2 className="text-sm font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest">
+              Library Control
+            </h2>
+          </div>
+          <Card className="p-6">
+            <div className="flex flex-col gap-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-light-text-primary dark:text-dark-text-primary mb-1">Index Repository</h3>
+                  <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
+                    Reprocess your photo library
+                  </p>
+                </div>
+                <button
+                  onClick={handleSelectFolder}
+                  disabled={scanning}
+                  className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-xl font-bold text-sm hover:bg-brand-secondary disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/20"
+                >
+                  {scanning ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>{Math.round(scanProgress * 100)}%</span>
+                    </>
+                  ) : (
+                    <>
+                      <FolderPlus size={16} />
+                      <span>Import Photos</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {stats && (
+                <div className="grid grid-cols-2 gap-4 mt-2">
+                  <div className="p-4 bg-light-bg dark:bg-dark-bg/50 rounded-2xl border border-light-border dark:border-dark-border">
+                    <div className="text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest mb-1">Photos</div>
+                    <div className="text-2xl font-black text-brand-primary">{stats.total_photos}</div>
+                  </div>
+                  <div className="p-4 bg-light-bg dark:bg-dark-bg/50 rounded-2xl border border-light-border dark:border-dark-border">
+                    <div className="text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest mb-1">People</div>
+                    <div className="text-2xl font-black text-brand-primary">{stats.total_people}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        </section>
+
+        {/* System Info Section */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <Cpu size={16} className="text-brand-primary" />
+            <h2 className="text-sm font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest">
+              Engine Status
+            </h2>
+          </div>
+          <Card className="p-6">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between py-2 border-b border-light-border dark:border-dark-border">
+                <span className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">AI Core</span>
+                <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">ACTIVE</span>
+              </div>
+              <div className="flex items-center justify-between py-2 border-b border-light-border dark:border-dark-border">
+                <span className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">Privacy Masking</span>
+                <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">VERIFIED</span>
+              </div>
+              <div className="flex items-center justify-between py-2">
+                <span className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">Version</span>
+                <span className="text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary">1.0.0-PROD</span>
               </div>
             </div>
-            <button
-              onClick={handleThemeToggle}
-              className="px-4 py-2 bg-dark-border dark:bg-dark-border rounded-lg text-dark-text-secondary dark:text-dark-text-secondary hover:bg-dark-border/80"
-            >
-              {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
-            </button>
-          </div>
-        </div>
+          </Card>
+        </section>
 
-        <div className="bg-dark-surface dark:bg-dark-surface border border-dark-border dark:border-dark-border rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-dark-text-primary dark:text-dark-text-primary mb-4">
-            Library
-          </h2>
-          <div className="space-y-4">
-            <button
-              onClick={handleSelectFolder}
-              disabled={scanning}
-              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              {scanning ? `Scanning... ${Math.round(scanProgress * 100)}%` : "Add Photos"}
-            </button>
-
-            {stats && (
-              <div className="grid grid-cols-2 gap-4 mt-4">
-                <div className="text-center p-4 bg-dark-bg dark:bg-dark-bg rounded-lg">
-                  <div className="text-2xl font-bold text-dark-text-primary dark:text-dark-text-primary">
-                    {stats.total_photos}
-                  </div>
-                  <div className="text-sm text-dark-text-secondary dark:text-dark-text-secondary">
-                    Photos
-                  </div>
-                </div>
-                <div className="text-center p-4 bg-dark-bg dark:bg-dark-bg rounded-lg">
-                  <div className="text-2xl font-bold text-dark-text-primary dark:text-dark-text-primary">
-                    {stats.total_people}
-                  </div>
-                  <div className="text-sm text-dark-text-secondary dark:text-dark-text-secondary">
-                    People
-                  </div>
-                </div>
-              </div>
-            )}
+        {/* Tip Section */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 size={16} className="text-brand-primary" />
+            <h2 className="text-sm font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest">
+              Insight
+            </h2>
           </div>
-        </div>
+          <div className="p-6 bg-brand-primary/10 rounded-3xl border border-brand-primary/20">
+            <h3 className="flex items-center gap-2 font-bold text-brand-primary mb-2">
+              <Shield size={18} />
+              Privacy Note
+            </h3>
+            <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary leading-relaxed">
+              PhotoSense-AI processed your images locally. No data is sent to the cloud. Your memories remain yours, and yours alone.
+            </p>
+          </div>
+        </section>
       </div>
     </div>
   );

@@ -1,6 +1,4 @@
-/** Main App component. */
-
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import ObjectsView from "./views/ObjectsView";
@@ -8,24 +6,13 @@ import PeopleView from "./views/PeopleView";
 import PhotosView from "./views/PhotosView";
 import SearchView from "./views/SearchView";
 import SettingsView from "./views/SettingsView";
-import { initTheme, getTheme, setTheme } from "./services/theme";
+import { ThemeProvider } from "./components/common/ThemeProvider";
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState("photos");
 
-  useEffect(() => {
-    initTheme();
-  }, []);
-
-  const handleThemeToggle = () => {
-    const current = getTheme();
-    const newTheme = current === "dark" ? "light" : "dark";
-    setTheme(newTheme);
-  };
-
   const handleSearch = (query: string) => {
     setCurrentPage("search");
-    // Pass query to search view via event
     window.dispatchEvent(new CustomEvent('search-query', { detail: query }));
   };
 
@@ -47,15 +34,24 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen flex flex-col dark">
-      <Header onThemeToggle={handleThemeToggle} onSearch={handleSearch} />
-      <div className="flex-1 flex overflow-hidden">
+    <ThemeProvider>
+      <div className="h-screen w-screen bg-light-bg dark:bg-dark-bg text-light-text-primary dark:text-dark-text-primary transition-colors duration-300 flex overflow-hidden font-sans selection:bg-brand-primary/20 selection:text-brand-primary">
         <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
-        <div className="flex-1 bg-dark-bg dark:bg-dark-bg overflow-hidden">
-          {renderPage()}
+
+        <div className="flex-1 flex flex-col min-w-0">
+          <Header
+            onSearch={handleSearch}
+            onOpenSettings={() => setCurrentPage("settings")}
+          />
+
+          <main className="flex-1 overflow-y-auto px-8 pb-8 pt-4 custom-scrollbar">
+            <div className="max-w-[1600px] mx-auto h-full">
+              {renderPage()}
+            </div>
+          </main>
         </div>
       </div>
-    </div>
+    </ThemeProvider>
   );
 };
 

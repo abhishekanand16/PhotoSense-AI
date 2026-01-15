@@ -1,7 +1,8 @@
-/** People view - face clusters. */
-
 import React, { useEffect, useState } from "react";
 import { peopleApi, Person } from "../services/api";
+import { Users, User, Edit2, Check, X } from "lucide-react";
+import EmptyState from "../components/common/EmptyState";
+import Card from "../components/common/Card";
 
 const PeopleView: React.FC = () => {
   const [people, setPeople] = useState<Person[]>([]);
@@ -26,6 +27,7 @@ const PeopleView: React.FC = () => {
   };
 
   const handleRename = async (personId: number, newName: string) => {
+    if (!newName.trim()) return;
     try {
       await peopleApi.updateName(personId, newName);
       await loadPeople();
@@ -37,99 +39,97 @@ const PeopleView: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-dark-text-secondary dark:text-dark-text-secondary">Loading people...</div>
+      <div className="flex flex-col items-center justify-center h-full gap-4">
+        <div className="w-12 h-12 border-4 border-brand-primary/20 border-t-brand-primary rounded-full animate-spin" />
+        <p className="text-light-text-tertiary dark:text-dark-text-tertiary font-bold animate-pulse uppercase tracking-widest text-xs">
+          Clustering Faces
+        </p>
       </div>
     );
   }
 
   if (people.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-center p-8">
-        <div className="text-6xl mb-4">👥</div>
-        <div className="text-xl font-semibold text-dark-text-primary dark:text-dark-text-primary mb-2">
-          No People Detected
-        </div>
-        <div className="text-dark-text-secondary dark:text-dark-text-secondary mb-6 max-w-md">
-          Faces will appear here once photos are analyzed
-        </div>
-        <div className="bg-dark-surface dark:bg-dark-surface border border-dark-border dark:border-dark-border rounded-lg p-4 max-w-md text-left">
-          <div className="text-sm text-dark-text-secondary dark:text-dark-text-secondary">
-            <p className="mb-2">💡 <strong>How it works:</strong></p>
-            <p>When you add photos, faces are automatically detected and grouped together. You can then name each person to organize your collection.</p>
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        icon={Users}
+        title="No faces detected"
+        description="Add photos to your library and our AI will automatically detect and group people. Your privacy is protected; all detection stays on your device."
+      />
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-dark-text-primary dark:text-dark-text-primary mb-1">
-          People
-        </h1>
-        <p className="text-dark-text-secondary dark:text-dark-text-secondary">
-          Face clusters grouped automatically
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="mb-10">
+        <div className="flex items-center gap-3 mb-2">
+          <Users className="text-brand-primary" size={24} />
+          <h1 className="text-3xl font-black text-light-text-primary dark:text-dark-text-primary tracking-tight">
+            People
+          </h1>
+        </div>
+        <p className="text-light-text-secondary dark:text-dark-text-secondary font-medium">
+          Automatically grouped face clusters from your entire collection.
         </p>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-6">
         {people.map((person) => (
-          <div
-            key={person.id}
-            className="bg-dark-surface dark:bg-dark-surface border border-dark-border dark:border-dark-border rounded-lg p-4"
-          >
-            <div className="aspect-square bg-dark-border dark:bg-dark-border rounded-lg mb-3 flex items-center justify-center text-4xl">
-              👤
+          <Card key={person.id} className="p-4 group" hover={!editingId}>
+            <div className="aspect-square bg-brand-primary/5 dark:bg-brand-primary/10 rounded-2xl mb-4 flex items-center justify-center text-brand-primary group-hover:scale-105 transition-transform duration-500">
+              <User size={48} strokeWidth={1} className="opacity-40 group-hover:opacity-100 transition-opacity" />
             </div>
+
             {editingId === person.id ? (
-              <div className="space-y-2">
+              <div className="space-y-3 animate-in fade-in zoom-in-95 duration-200">
                 <input
                   type="text"
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
-                  className="w-full px-2 py-1 bg-dark-bg dark:bg-dark-bg border border-dark-border dark:border-dark-border rounded text-dark-text-primary dark:text-dark-text-primary"
+                  className="w-full px-3 py-2 bg-light-bg dark:bg-dark-bg/50 border border-brand-primary/30 rounded-xl text-sm text-light-text-primary dark:text-dark-text-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
                   autoFocus
+                  onKeyDown={(e) => e.key === 'Enter' && handleRename(person.id, editName)}
                 />
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleRename(person.id, editName)}
-                    className="flex-1 px-3 py-1 bg-blue-600 text-white rounded text-sm"
+                    className="flex-1 h-9 bg-brand-primary text-white rounded-lg text-xs font-bold hover:bg-brand-secondary transition-colors flex items-center justify-center"
                   >
-                    Save
+                    <Check size={14} />
                   </button>
                   <button
                     onClick={() => {
                       setEditingId(null);
                       setEditName("");
                     }}
-                    className="flex-1 px-3 py-1 bg-dark-border dark:bg-dark-border rounded text-sm text-dark-text-secondary dark:text-dark-text-secondary"
+                    className="flex-1 h-9 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-lg text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary hover:text-red-500 transition-colors flex items-center justify-center"
                   >
-                    Cancel
+                    <X size={14} />
                   </button>
                 </div>
               </div>
             ) : (
-              <>
-                <div className="font-semibold text-dark-text-primary dark:text-dark-text-primary mb-1">
-                  {person.name || `Person ${person.id}`}
+              <div className="flex flex-col h-full">
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <span className="font-bold text-light-text-primary dark:text-dark-text-primary truncate transition-colors group-hover:text-brand-primary">
+                    {person.name || `Unnamed Person`}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setEditingId(person.id);
+                      setEditName(person.name || "");
+                    }}
+                    className="p-1 opacity-0 group-hover:opacity-100 text-light-text-tertiary dark:text-dark-text-tertiary hover:text-brand-primary transition-all"
+                  >
+                    <Edit2 size={14} />
+                  </button>
                 </div>
-                <div className="text-sm text-dark-text-secondary dark:text-dark-text-secondary mb-2">
-                  {person.face_count} photos
+                <div className="flex items-center gap-1.5 text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-wider">
+                  <span>{person.face_count}</span>
+                  <span>Photos</span>
                 </div>
-                <button
-                  onClick={() => {
-                    setEditingId(person.id);
-                    setEditName(person.name || "");
-                  }}
-                  className="w-full px-3 py-1 bg-dark-border dark:bg-dark-border rounded text-sm text-dark-text-secondary dark:text-dark-text-secondary hover:bg-dark-border/80"
-                >
-                  Rename
-                </button>
-              </>
+              </div>
             )}
-          </div>
+          </Card>
         ))}
       </div>
     </div>
