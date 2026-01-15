@@ -1,187 +1,318 @@
 # PhotoSense-AI
 
-Offline photo organization system with facial recognition and automatic person grouping.
+Offline visual intelligence application for organizing and searching photos using computer vision and machine learning.
 
 ## Overview
 
-PhotoSense-AI is a privacy-first, offline photo management system that scans local image folders, extracts metadata, performs facial recognition, and automatically groups photos by individuals using unsupervised learning. The system runs entirely on your local machine—no cloud services, no external APIs, no data leaving your device.
+PhotoSense-AI is a desktop application that automatically understands your photos using computer vision. It detects faces, identifies objects, and enables semantic search—all running locally on your machine with no cloud services.
 
 ## Features
 
-- **Recursive Image Scanning**: Automatically finds all images in specified directories
-- **Metadata Extraction**: Extracts EXIF data including date taken, camera model, and image dimensions
-- **Face Detection**: Detects human faces in images using MTCNN
-- **Face Recognition**: Generates facial embeddings using FaceNet
-- **Automatic Clustering**: Groups faces by person using DBSCAN unsupervised learning
-- **Person Labeling**: Map clusters to human-readable names
-- **Local Search**: Search images by person, date, or camera model
-- **Fully Offline**: All processing happens locally—no internet required after installation
+- **Automatic Photo Analysis**: Scans folders and extracts metadata
+- **Face Detection & Clustering**: Identifies and groups people automatically
+- **Object Detection**: Recognizes objects and categorizes photos
+- **Semantic Search**: Find photos by natural language descriptions
+- **People Management**: Rename and merge person clusters
+- **Fully Offline**: All processing happens locally
+- **Fast Vector Search**: FAISS-powered similarity search
+- **Metadata Extraction**: EXIF data parsing and organization
 
 ## Tech Stack
 
-- **Language**: Python 3.10+
-- **Face Detection**: MTCNN
-- **Face Embeddings**: FaceNet (keras-facenet)
-- **Clustering**: DBSCAN (scikit-learn)
-- **Metadata Extraction**: Pillow (PIL)
-- **Database**: SQLite
-- **CLI**: Click
-- **Optional UI**: Streamlit
+- **Desktop App**: Tauri + React + TypeScript + Tailwind CSS
+- **Backend API**: FastAPI (Python)
+- **ML/CV**: RetinaFace, YOLOv8, CLIP, ArcFace
+- **Storage**: SQLite (metadata) + FAISS (vector search)
+- **Build Tools**: Vite, Rust/Cargo
 
-## Setup Instructions
+## Prerequisites
 
-### Prerequisites
+- Python 3.10+
+- Node.js 18+
+- Rust (for Tauri desktop app)
+  - Install from [rustup.rs](https://rustup.rs/)
 
-- Python 3.10 or higher
-- pip3
-- macOS (tested), Linux, or Windows
+## Installation
 
-### Installation
+### 1. Clone the Repository
 
-1. Clone or navigate to the project directory:
 ```bash
+git clone https://github.com/yourusername/PhotoSense-AI.git
 cd PhotoSense-AI
 ```
 
-2. Create a virtual environment:
+### 2. Backend Setup
+
 ```bash
+# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
 
-3. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Usage
+### 3. Desktop App Setup
 
-#### Complete Workflow
-
-1. **Scan a directory for images**:
 ```bash
-python src/main.py scan --input /path/to/your/photos
+cd apps/desktop
+
+# Install dependencies
+npm install
+
+# Install Tauri CLI (if not already installed)
+npm install -g @tauri-apps/cli
 ```
 
-2. **Detect faces in scanned images**:
+## Running
+
+### Development Mode
+
+#### Start Backend API
+
 ```bash
-python src/main.py detect
+# From project root
+# Activate virtual environment first
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Start the API server
+uvicorn services.api.main:app --reload --port 8000
 ```
 
-3. **Generate face embeddings**:
+The API will be available at `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/health`
+
+#### Start Desktop App
+
 ```bash
-python src/main.py encode
+# From apps/desktop directory
+npm run tauri dev
 ```
 
-4. **Cluster faces into people**:
+This will start the Tauri development server and open the desktop application.
+
+### Production Build
+
 ```bash
-python src/main.py cluster
+# Build desktop app
+cd apps/desktop
+npm run tauri build
+
+# The built application will be in apps/desktop/src-tauri/target/release/
 ```
 
-5. **Label people with names**:
-```bash
-# First, list all people
-python src/main.py list-people
+## Usage
 
-# Then label a person
-python src/main.py label --person-id 1 --name "Alice"
+### Initial Setup
+
+1. **Add Photos**: 
+   - Open the Settings view
+   - Click "Add Photos" or "Scan Folder"
+   - Select a folder containing your photos
+   - The app will automatically process all images
+
+2. **Wait for Processing**:
+   - First-time processing downloads ML models automatically
+   - Large photo collections may take time to process
+   - Progress is shown in the UI
+
+### Using the Application
+
+1. **Browse Photos**: 
+   - View photos organized by date in the Photos view
+   - Navigate through your collection
+
+2. **People View**:
+   - See automatically detected people clusters
+   - Click on a person to see all their photos
+   - Rename people by clicking the edit icon
+   - Merge duplicate clusters if needed
+
+3. **Objects View**:
+   - Browse photos by detected objects
+   - Filter by object categories
+
+4. **Search**:
+   - Use natural language queries (e.g., "beach sunset", "dog playing")
+   - Filter by person, date range, or object category
+   - Results are ranked by relevance
+
+5. **Settings**:
+   - Manage photo folders
+   - View statistics
+   - Configure application preferences
+
+## API Documentation
+
+The backend API provides REST endpoints for all functionality:
+
+### Endpoints
+
+- `GET /` - API status
+- `GET /health` - Health check
+- `GET /photos` - List all photos
+- `GET /photos/{id}` - Get photo details
+- `POST /scan` - Scan a folder for photos
+- `GET /people` - List all detected people
+- `GET /people/{id}` - Get person details
+- `PUT /people/{id}` - Update person name
+- `POST /people/merge` - Merge two people
+- `GET /objects` - List detected objects
+- `POST /search` - Semantic search
+- `GET /stats` - Database statistics
+
+See `http://localhost:8000/docs` for interactive API documentation.
+
+## Project Structure
+
+```
+PhotoSense-AI/
+├── apps/
+│   └── desktop/              # Tauri + React desktop app
+│       ├── src/
+│       │   ├── components/   # React components
+│       │   ├── views/        # Main views (Photos, People, Search, etc.)
+│       │   ├── services/     # API client and utilities
+│       │   └── styles/       # CSS/Tailwind styles
+│       └── src-tauri/        # Rust backend for Tauri
+├── services/
+│   ├── api/                  # FastAPI service
+│   │   ├── routes/           # API route handlers
+│   │   ├── models.py         # Pydantic models
+│   │   └── main.py           # FastAPI app
+│   └── ml/                   # ML pipeline
+│       ├── detectors/        # Face and object detectors
+│       ├── embeddings/       # Face and image embedding models
+│       └── storage/          # SQLite and FAISS storage
+├── data/                     # Data directories (created at runtime)
+│   ├── raw_images/           # Processed image cache
+│   ├── faces/                # Face detection cache
+│   ├── embeddings/           # Embedding cache
+│   ├── indices/              # FAISS index files
+│   └── cache/                # General cache
+├── requirements.txt          # Python dependencies
+└── README.md                 # This file
 ```
 
-6. **Search for images**:
+## Configuration
+
+### Database
+
+The application uses SQLite for metadata storage. The database file (`photosense.db`) is created automatically in the project root.
+
+### Data Directories
+
+The following directories are created automatically:
+- `data/raw_images/` - Processed image thumbnails
+- `data/faces/` - Face detection results
+- `data/embeddings/` - Cached embeddings
+- `data/indices/` - FAISS vector indices
+- `data/cache/` - General cache files
+
+### Model Files
+
+ML models are downloaded automatically on first use:
+- RetinaFace (face detection)
+- YOLOv8 (object detection)
+- CLIP (image embeddings)
+- ArcFace (face embeddings)
+
+Models are cached in the system's default cache directory.
+
+## Development
+
+### Running Tests
+
 ```bash
-# Search by person
-python src/main.py search --person "Alice"
+# Backend tests (when available)
+pytest
 
-# Search by date
-python src/main.py search --date "2023-12-25"
-
-# Search by date range
-python src/main.py search --start-date "2023-01-01" --end-date "2023-12-31"
-
-# Search by camera
-python src/main.py search --camera "iPhone"
+# Frontend tests (when available)
+cd apps/desktop
+npm test
 ```
 
-7. **Check database statistics**:
-```bash
-python src/main.py stats
-```
+### Code Style
 
-#### Optional: Web UI
+- Python: Follow PEP 8
+- TypeScript/React: Use ESLint and Prettier
+- Rust: Use `rustfmt`
 
-Launch the Streamlit web interface:
-```bash
-streamlit run app.py
-```
+### Adding New Features
 
-Then open your browser to the URL shown (typically http://localhost:8501).
+1. Backend: Add routes in `services/api/routes/`
+2. Frontend: Add views in `apps/desktop/src/views/`
+3. ML: Add detectors/embeddings in `services/ml/`
 
-#### View all available commands:
-```bash
-python src/main.py --help
-```
+## Troubleshooting
 
-## How It Works
+### Common Issues
 
-The system follows a pipeline approach:
+**Models not downloading:**
+- Check internet connection
+- Ensure sufficient disk space
+- Check Python/transformers cache permissions
 
-1. **Scanning**: Recursively finds all image files (JPG, JPEG, PNG) in the specified directory
-2. **Metadata Extraction**: Extracts EXIF data and basic image information
-3. **Face Detection**: Detects all faces in each image using MTCNN
-4. **Face Cropping**: Crops and normalizes detected face regions
-5. **Embedding Generation**: Generates facial embeddings using FaceNet
-6. **Clustering**: Groups similar faces using DBSCAN unsupervised learning
-7. **Person Mapping**: Allows assigning human-readable names to clusters
-8. **Search**: Query images by person, date, or camera model
+**Slow processing:**
+- Large photo collections take time
+- Processing happens in background
+- Check system resources (CPU, RAM)
 
-All data is stored locally in a SQLite database and file system.
+**Database errors:**
+- Ensure write permissions in project directory
+- Check disk space
+- Verify SQLite installation
 
-## Project Status
+**Tauri build errors:**
+- Ensure Rust is properly installed: `rustc --version`
+- Update Rust: `rustup update`
+- Clear build cache: `cd apps/desktop && rm -rf src-tauri/target`
 
-**Status**: All Core Features Implemented ✅
+**API connection errors:**
+- Ensure backend is running on port 8000
+- Check CORS settings if accessing from browser
+- Verify firewall settings
 
-- ✅ Image scanning and metadata extraction
-- ✅ SQLite database schema
-- ✅ Face detection using MTCNN
-- ✅ Face embeddings using FaceNet
-- ✅ Clustering using DBSCAN
-- ✅ Search and labeling functionality
-- ✅ CLI interface with all commands
-- ✅ Optional Streamlit web UI
+## Performance Tips
 
-## Extension Points
+- Process photos in batches for large collections
+- Use SSD storage for better I/O performance
+- Allocate sufficient RAM (8GB+ recommended)
+- Close other applications during initial scan
 
-The following features are designed as extension points but not yet implemented. The codebase is structured to support these additions:
+## Security & Privacy
 
-### Video Processing
-- **Location**: `src/scanner/scan_images.py` - Add video file extensions
-- **Implementation**: Extract frames from video files, then process through existing face detection pipeline
-- **Storage**: Extend `images` table to include video metadata
+- **100% Local Processing**: All ML models run on your machine
+- **No Cloud Services**: No data is sent to external servers
+- **Local Storage**: All data stored in project directory
+- **No Telemetry**: No tracking or analytics
 
-### Face Similarity Search
-- **Location**: `src/search/search.py` - Add similarity search method
-- **Implementation**: Use FAISS for efficient vector similarity search on embeddings
-- **Usage**: Find faces similar to a query face image
+## Contributing
 
-### Emotion Detection
-- **Location**: `src/face/` - New module `emotion.py`
-- **Implementation**: Add emotion classification model (e.g., FER2013) after face detection
-- **Storage**: Add `emotion` column to `faces` table
+Contributions are welcome! Please:
 
-### Enhanced UI
-- **Location**: `app.py` - Streamlit interface
-- **Improvements**: 
-  - Interactive graph visualization of person relationships
-  - Timeline view for chronological browsing
-  - Advanced filtering and sorting options
-  - Face comparison tool
-
-### Performance Optimizations
-- **Batch Processing**: Process multiple images in parallel
-- **Caching**: Cache embeddings and detection results
-- **Indexing**: Add database indexes for faster queries
-- **Duplicate Detection**: Use perceptual hashing to identify duplicate images
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
 ## License
 
-This project is designed as a portfolio/resume project. Use as you see fit.
+[Add your license here]
+
+## Acknowledgments
+
+- RetinaFace for face detection
+- Ultralytics YOLOv8 for object detection
+- OpenAI CLIP for image embeddings
+- FAISS for efficient vector search
+- Tauri for desktop app framework
+
+## Notes
+
+- First run will download ML models automatically (several GB)
+- Processing large photo collections may take time
+- All data is stored locally—no cloud services used
+- Models are cached for faster subsequent runs

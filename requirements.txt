@@ -1,26 +1,27 @@
-# PhotoSense-AI Dependencies
-# Python 3.10+ required
+# FastAPI and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
 
-# Core dependencies
+# Computer Vision
+opencv-python>=4.8.0
 pillow>=10.0.0
 numpy>=1.24.0
 
-# Face detection and recognition
-mtcnn>=0.1.1
-tensorflow>=2.13.0
-keras-facenet>=0.3.0
+# Face detection & embeddings (ONNX, no TensorFlow)
+insightface>=0.7.3
+onnxruntime>=1.16.0
+
+# Object detection
+ultralytics>=8.0.0
+
+# Image embeddings (CLIP)
+transformers>=4.35.0
+torch>=2.1.0
+torchvision>=0.16.0
+
+# Vector search
+faiss-cpu>=1.7.4
 
 # Clustering
 scikit-learn>=1.3.0
-
-# Database
-# SQLite is included in Python standard library
-
-# Optional: Vector search (for future use)
-# faiss-cpu>=1.7.4
-
-# Optional: UI
-streamlit>=1.28.0
-
-# CLI
-click>=8.1.0
