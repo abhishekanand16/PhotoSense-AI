@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+dist/
+build/
+
+# Data directories (user's photos)
+data/raw_images/*
+data/faces/*
+data/embeddings/*
+!data/raw_images/.gitkeep
+!data/faces/.gitkeep
+!data/embeddings/.gitkeep
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Model files (if downloaded)
+*.h5
+*.pb
+models/
+
+# Streamlit
+.streamlit/
