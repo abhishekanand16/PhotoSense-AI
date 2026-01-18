@@ -92,7 +92,7 @@ const PeopleView: React.FC = () => {
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleRename(person.id, editName)}
-                    className="flex-1 h-9 bg-brand-primary text-white rounded-lg text-xs font-bold hover:bg-brand-secondary transition-colors flex items-center justify-center"
+                    className="flex-1 h-9 bg-brand-primary text-white dark:text-black rounded-lg text-xs font-bold hover:bg-brand-secondary transition-colors flex items-center justify-center"
                   >
                     <Check size={14} />
                   </button>

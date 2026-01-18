@@ -140,7 +140,7 @@ const SettingsView: React.FC = () => {
                 <button
                   onClick={handleSelectFolder}
                   disabled={scanning}
-                  className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-xl font-bold text-sm hover:bg-brand-secondary disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/20"
+                  className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white dark:text-black rounded-xl font-bold text-sm hover:bg-brand-secondary disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/20"
                 >
                   {scanning ? (
                     <>

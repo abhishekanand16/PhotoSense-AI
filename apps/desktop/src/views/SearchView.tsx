@@ -69,7 +69,7 @@ const SearchView: React.FC = () => {
           <button
             onClick={handleSearch}
             disabled={loading}
-            className="absolute right-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl font-bold hover:bg-brand-secondary disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/20 flex items-center gap-2"
+            className="absolute right-2 px-6 py-2.5 bg-brand-primary text-white dark:text-black rounded-xl font-bold hover:bg-brand-secondary disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/20 flex items-center gap-2"
           >
             {loading ? (
               <Loader2 size={18} className="animate-spin" />

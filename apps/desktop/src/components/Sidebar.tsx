@@ -84,19 +84,19 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
                 key={item.id}
                 onClick={() => onNavigate(item.id)}
                 className={`group w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl transition-all duration-200 ${isActive
-                    ? "bg-brand-primary text-white shadow-lg shadow-brand-primary/25"
-                    : "text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-bg dark:hover:bg-dark-bg"
+                  ? "bg-brand-primary text-white dark:text-black shadow-lg shadow-brand-primary/25"
+                  : "text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-bg dark:hover:bg-dark-bg"
                   }`}
               >
                 <div className="flex items-center gap-3">
-                  <Icon size={20} className={isActive ? "text-white" : "text-brand-primary opacity-70 group-hover:opacity-100"} />
+                  <Icon size={20} className={isActive ? "text-white dark:text-black" : "text-brand-primary opacity-70 group-hover:opacity-100"} />
                   <span className="font-semibold text-sm">{item.label}</span>
                 </div>
                 {item.count !== null && item.count > 0 && (
                   <span
                     className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isActive
-                        ? "bg-white/20 text-white"
-                        : "bg-light-bg dark:bg-dark-bg text-light-text-tertiary dark:text-dark-text-tertiary"
+                      ? "bg-white/20 dark:bg-black/20 text-white dark:text-black"
+                      : "bg-light-bg dark:bg-dark-bg text-light-text-tertiary dark:text-dark-text-tertiary"
                       }`}
                   >
                     {item.count}

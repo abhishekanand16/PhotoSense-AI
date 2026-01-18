@@ -8,31 +8,32 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Deep Charcoal/Slate Dark Theme
+        // Blue to Teal Brand Palette
         brand: {
-          primary: '#8b5cf6', // Violet 500
-          secondary: '#a78bfa', // Violet 400
-          accent: '#2dd4bf', // Teal 400
+          primary: 'hsl(var(--brand-primary))',
+          secondary: 'hsl(var(--brand-secondary))',
+          accent: '#06b6d4', // Cyan 500
         },
+        // High-Contrast Dark Theme
         dark: {
-          bg: '#0f172a', // Slate 900
-          surface: '#1e293b', // Slate 800
-          border: 'rgba(255, 255, 255, 0.05)',
+          bg: '#000000', // Pure Black
+          surface: '#09090b', // Zinc 950
+          border: 'rgba(255, 255, 255, 0.1)',
           text: {
-            primary: '#f8fafc', // Slate 50
-            secondary: '#94a3b8', // Slate 400
-            tertiary: '#64748b', // Slate 500
+            primary: '#ffffff', // Pure White
+            secondary: '#a1a1aa', // Zinc 400
+            tertiary: '#52525b', // Zinc 500
           },
         },
-        // Clean Soft Light Theme
+        // Clean Light Theme
         light: {
-          bg: '#f8fafc', // Slate 50
-          surface: '#ffffff',
-          border: 'rgba(0, 0, 0, 0.05)',
+          bg: '#ffffff', // Pure White
+          surface: '#fafafa', // Zinc 50
+          border: 'rgba(0, 0, 0, 0.1)',
           text: {
-            primary: '#0f172a', // Slate 900
-            secondary: '#475569', // Slate 600
-            tertiary: '#94a3b8', // Slate 400
+            primary: '#000000', // Pure Black
+            secondary: '#3f3f46', // Zinc 700
+            tertiary: '#a1a1aa', // Zinc 400
           },
         },
       },
