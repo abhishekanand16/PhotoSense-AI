@@ -12,11 +12,17 @@ venv.bak/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg
 
 # Data directories (user's photos)
 data/raw_images/*
 data/faces/*
 data/embeddings/*
+data/indices/*
+data/cache/*
 !data/raw_images/.gitkeep
 !data/faces/.gitkeep
 !data/embeddings/.gitkeep
@@ -26,24 +32,71 @@ data/embeddings/*
 *.sqlite
 *.sqlite3
 
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Frontend build
+apps/desktop/dist/
+apps/desktop/.vite/
+apps/desktop/.tauri/
+
+# Rust/Tauri
+apps/desktop/src-tauri/target/
+Cargo.lock
+**/*.rs.bk
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+Desktop.ini
 
 # Logs
 *.log
+logs/
+*.log.*
 
 # Model files (if downloaded)
 *.h5
 *.pb
+*.onnx
+*.pt
+*.pth
+*.pkl
 models/
+.cache/
 
 # Streamlit
 .streamlit/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
