@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { scanApi } from "../services/api";
-import { open } from "@tauri-apps/api/dialog";
+import { scanApi, healthApi } from "../services/api";
+import { openFolderDialog } from "../utils/tauri";
 import { useTheme } from "./common/ThemeProvider";
 import {
   Sun,
@@ -9,7 +9,8 @@ import {
   Plus,
   Loader2,
   Settings as SettingsIcon,
-  Circle
+  Circle,
+  RefreshCw
 } from "lucide-react";
 
 interface HeaderProps {
@@ -34,21 +35,38 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
 
   const handleSelectFolder = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-      });
+      console.log("Opening folder dialog...");
+      const folderPath = await openFolderDialog();
 
-      if (selected && typeof selected === "string") {
-        await handleScan(selected);
+      if (folderPath === null) {
+        // User cancelled the dialog
+        console.log("User cancelled folder selection");
+        return;
+      }
+
+      if (folderPath) {
+        console.log("Selected folder:", folderPath);
+        await handleScan(folderPath);
+      } else {
+        console.error("Invalid folder selection");
+        alert("Invalid folder selection. Please try again.");
       }
     } catch (error) {
       console.error("Failed to select folder:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      alert(`Failed to select folder: ${errorMessage}\n\nIf this persists, check the browser console for more details.`);
     }
   };
 
   const handleScan = async (folderPath: string) => {
     try {
+      // Check if API is available
+      const isHealthy = await healthApi.check();
+      if (!isHealthy) {
+        alert("Cannot connect to backend API. Please make sure the server is running at http://localhost:8000\n\nStart it with: uvicorn services.api.main:app --reload --port 8000");
+        return;
+      }
+
       setProcessingStatus("scanning");
       setScanProgress(0);
 
@@ -59,20 +77,33 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
           const status = await scanApi.getStatus(job.job_id);
           setScanProgress(status.progress);
 
-          if (status.status === "completed" || status.status === "error") {
+          if (status.status === "completed") {
             clearInterval(interval);
             setProcessingStatus("idle");
             setScanProgress(0);
-            window.location.reload();
+            // Reload after a short delay to show completion
+            setTimeout(() => {
+              window.location.reload();
+            }, 500);
+          } else if (status.status === "error") {
+            clearInterval(interval);
+            setProcessingStatus("idle");
+            setScanProgress(0);
+            alert(`Scan failed: ${status.message || "Unknown error"}`);
           }
         } catch (error) {
           console.error("Failed to get scan status:", error);
+          clearInterval(interval);
           setProcessingStatus("idle");
+          setScanProgress(0);
+          alert(`Failed to get scan status: ${error instanceof Error ? error.message : String(error)}`);
         }
       }, 1000);
     } catch (error) {
       console.error("Failed to start scan:", error);
       setProcessingStatus("idle");
+      setScanProgress(0);
+      alert(`Failed to start scan: ${error instanceof Error ? error.message : String(error)}\n\nMake sure the backend API is running at http://localhost:8000`);
     }
   };
 
@@ -81,6 +112,11 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
     if (onSearch && searchQuery.trim()) {
       onSearch(searchQuery.trim());
     }
+  };
+
+  const handleRefresh = () => {
+    // Dispatch refresh event to reload photos
+    window.dispatchEvent(new CustomEvent('refresh-photos'));
   };
 
   return (
@@ -140,6 +176,14 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+
+            <button
+              onClick={handleRefresh}
+              className="p-2.5 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary hover:border-brand-primary transition-all"
+              title="Refresh"
+            >
+              <RefreshCw size={18} />
             </button>
 
             {onOpenSettings && (

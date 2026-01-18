@@ -172,6 +172,46 @@ class SQLiteStore:
         conn.close()
         return dict(row) if row else None
 
+    def update_photo_metadata(
+        self,
+        photo_id: int,
+        date_taken: Optional[str] = None,
+        camera_model: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        file_size: Optional[int] = None,
+    ) -> None:
+        """Update photo metadata. Only updates fields that are not None."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        updates = []
+        values = []
+        
+        if date_taken is not None:
+            updates.append("date_taken = ?")
+            values.append(date_taken)
+        if camera_model is not None:
+            updates.append("camera_model = ?")
+            values.append(camera_model)
+        if width is not None:
+            updates.append("width = ?")
+            values.append(width)
+        if height is not None:
+            updates.append("height = ?")
+            values.append(height)
+        if file_size is not None:
+            updates.append("file_size = ?")
+            values.append(file_size)
+        
+        if updates:
+            values.append(photo_id)
+            query = f"UPDATE photos SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, values)
+            conn.commit()
+        
+        conn.close()
+
     def get_all_photos(self) -> List[Dict]:
         """Get all photos."""
         conn = sqlite3.connect(self.db_path)
@@ -353,6 +393,38 @@ class SQLiteStore:
         conn.commit()
         conn.close()
         return feedback_id
+
+    def delete_photo(self, photo_id: int) -> bool:
+        """Delete a photo and all related data (faces, objects, feedback). Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            # First, get all face IDs for this photo to delete related feedback
+            cursor.execute("SELECT id FROM faces WHERE photo_id = ?", (photo_id,))
+            face_ids = [row[0] for row in cursor.fetchall()]
+            
+            # Delete feedback for faces of this photo
+            if face_ids:
+                placeholders = ','.join('?' * len(face_ids))
+                cursor.execute(f"DELETE FROM feedback WHERE face_id IN ({placeholders})", face_ids)
+            
+            # Delete faces for this photo
+            cursor.execute("DELETE FROM faces WHERE photo_id = ?", (photo_id,))
+            
+            # Delete objects for this photo
+            cursor.execute("DELETE FROM objects WHERE photo_id = ?", (photo_id,))
+            
+            # Delete the photo itself
+            cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+            
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
 
     def get_statistics(self) -> Dict:
         """Get database statistics."""

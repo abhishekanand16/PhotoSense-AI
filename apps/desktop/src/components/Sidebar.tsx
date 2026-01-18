@@ -56,7 +56,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
         {/* Logo Section */}
         <div className="p-8 pb-4">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-brand-primary rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-primary/20">
+            <div className="w-10 h-10 bg-brand-primary rounded-3xl flex items-center justify-center text-white shadow-lg shadow-brand-primary/20">
               <LayoutDashboard size={24} />
             </div>
             <div>

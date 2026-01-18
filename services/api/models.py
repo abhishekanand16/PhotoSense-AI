@@ -63,6 +63,7 @@ class JobStatusResponse(BaseModel):
     status: str
     progress: float
     message: Optional[str] = None
+    phase: Optional[str] = None  # "import", "scanning", or "complete"
 
 
 class UpdatePersonRequest(BaseModel):

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { scanApi, statsApi } from "../services/api";
-import { open } from "@tauri-apps/api/dialog";
+import { scanApi, statsApi, healthApi, photosApi } from "../services/api";
+import { openFolderDialog } from "../utils/tauri";
 import { useTheme } from "../components/common/ThemeProvider";
 import {
   Settings as SettingsIcon,
@@ -11,7 +11,9 @@ import {
   Cpu,
   FolderPlus,
   BarChart3,
-  Loader2
+  Loader2,
+  RefreshCw,
+  Scan
 } from "lucide-react";
 import Card from "../components/common/Card";
 
@@ -19,7 +21,9 @@ const SettingsView: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
+  const [scanMessage, setScanMessage] = useState("");
   const [stats, setStats] = useState<any>(null);
+  const [updatingMetadata, setUpdatingMetadata] = useState(false);
 
   useEffect(() => {
     loadStats();
@@ -36,45 +40,147 @@ const SettingsView: React.FC = () => {
 
   const handleSelectFolder = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-      });
+      console.log("Opening folder dialog...");
+      const folderPath = await openFolderDialog();
 
-      if (selected && typeof selected === "string") {
-        await handleScan(selected);
+      if (folderPath === null) {
+        // User cancelled the dialog
+        console.log("User cancelled folder selection");
+        return;
+      }
+
+      if (folderPath) {
+        console.log("Selected folder:", folderPath);
+        await handleScan(folderPath);
+      } else {
+        console.error("Invalid folder selection");
+        alert("Invalid folder selection. Please try again.");
       }
     } catch (error) {
       console.error("Failed to select folder:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      alert(`Failed to select folder: ${errorMessage}\n\nIf this persists, check the browser console for more details.`);
     }
   };
 
   const handleScan = async (folderPath: string) => {
     try {
+      // Check if API is available
+      const isHealthy = await healthApi.check();
+      if (!isHealthy) {
+        alert("Cannot connect to backend API. Please make sure the server is running at http://localhost:8000\n\nStart it with: uvicorn services.api.main:app --reload --port 8000");
+        return;
+      }
+
       setScanning(true);
       setScanProgress(0);
 
       const job = await scanApi.start(folderPath, true);
+      let hasRefreshedAfterImport = false;
 
       const interval = setInterval(async () => {
         try {
           const status = await scanApi.getStatus(job.job_id);
           setScanProgress(status.progress);
+          setScanMessage(status.message || "");
 
-          if (status.status === "completed" || status.status === "error") {
+          // Refresh photos after import phase completes (photos are now visible)
+          if (status.phase === "scanning" && !hasRefreshedAfterImport) {
+            hasRefreshedAfterImport = true;
+            window.dispatchEvent(new CustomEvent('refresh-photos'));
+            await loadStats();
+          }
+
+          if (status.status === "completed") {
             clearInterval(interval);
             setScanning(false);
-            if (status.status === "completed") {
-              await loadStats();
-            }
+            setScanMessage("");
+            await loadStats();
+            // Final refresh to show any face/object data
+            window.dispatchEvent(new CustomEvent('refresh-photos'));
+          } else if (status.status === "error") {
+            clearInterval(interval);
+            setScanning(false);
+            setScanMessage("");
+            alert(`Scan failed: ${status.message || "Unknown error"}`);
           }
         } catch (error) {
           console.error("Failed to get scan status:", error);
+          clearInterval(interval);
+          setScanning(false);
+          setScanMessage("");
+          alert(`Failed to get scan status: ${error instanceof Error ? error.message : String(error)}`);
         }
       }, 1000);
     } catch (error) {
       console.error("Failed to start scan:", error);
       setScanning(false);
+      alert(`Failed to start scan: ${error instanceof Error ? error.message : String(error)}\n\nMake sure the backend API is running at http://localhost:8000`);
+    }
+  };
+
+  const handleUpdateMetadata = async () => {
+    try {
+      setUpdatingMetadata(true);
+      await photosApi.updateMetadata();
+      alert("Metadata update started in the background. Photos will be updated with date information and other metadata. This may take a few minutes.");
+      // Refresh stats after a delay
+      setTimeout(async () => {
+        await loadStats();
+        window.dispatchEvent(new CustomEvent('refresh-photos'));
+      }, 2000);
+    } catch (error) {
+      console.error("Failed to update metadata:", error);
+      alert(`Failed to update metadata: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setUpdatingMetadata(false);
+    }
+  };
+
+  const handleScanFaces = async () => {
+    try {
+      // Check if API is available
+      const isHealthy = await healthApi.check();
+      if (!isHealthy) {
+        alert("Cannot connect to backend API. Please make sure the server is running at http://localhost:8000\n\nStart it with: uvicorn services.api.main:app --reload --port 8000");
+        return;
+      }
+
+      setScanning(true);
+      setScanProgress(0);
+
+      const job = await scanApi.scanFaces();
+
+      const interval = setInterval(async () => {
+        try {
+          const status = await scanApi.getStatus(job.job_id);
+          setScanProgress(status.progress);
+          setScanMessage(status.message || "");
+
+          if (status.status === "completed") {
+            clearInterval(interval);
+            setScanning(false);
+            setScanMessage("");
+            await loadStats();
+            window.dispatchEvent(new CustomEvent('refresh-photos'));
+          } else if (status.status === "error") {
+            clearInterval(interval);
+            setScanning(false);
+            setScanMessage("");
+            alert(`Face scanning failed: ${status.message || "Unknown error"}`);
+          }
+        } catch (error) {
+          console.error("Failed to get scan status:", error);
+          clearInterval(interval);
+          setScanning(false);
+          setScanMessage("");
+          alert(`Failed to get scan status: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }, 1000);
+    } catch (error) {
+      console.error("Failed to start face scanning:", error);
+      setScanning(false);
+      alert(`Failed to start face scanning: ${error instanceof Error ? error.message : String(error)}\n\nMake sure the backend API is running at http://localhost:8000`);
     }
   };
 
@@ -118,6 +224,67 @@ const SettingsView: React.FC = () => {
               </button>
             </div>
           </Card>
+
+          {/* AI Status Section */}
+          <div className="mt-8">
+            <div className="flex items-center gap-2 mb-4">
+              <RefreshCw size={16} className={`text-brand-primary ${scanning ? 'animate-spin' : ''}`} />
+              <h2 className="text-sm font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest">
+                AI Status
+              </h2>
+            </div>
+            <Card className="p-6">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="relative">
+                  <div className={`w-3 h-3 rounded-full ${scanning ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)]' : 'bg-light-text-tertiary dark:bg-dark-text-tertiary opacity-30'}`} />
+                  {scanning && (
+                    <div className="absolute inset-0 w-3 h-3 rounded-full bg-emerald-500 animate-ping opacity-40" />
+                  )}
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-bold text-light-text-primary dark:text-dark-text-primary">
+                    {scanning ? "AI is Processing" : "System Idle"}
+                  </h3>
+                  <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
+                    {scanning ? (scanMessage || "Processing images...") : "Ready for next task"}
+                  </p>
+                </div>
+                {scanning && (
+                  <div className="text-lg font-black text-brand-primary">
+                    {Math.round(scanProgress * 100)}%
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-4 border-t border-light-border dark:border-dark-border">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-light-text-primary dark:text-dark-text-primary mb-1">Scan Faces</h3>
+                    <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
+                      Run face recognition on imported photos
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleScanFaces}
+                    disabled={scanning}
+                    className="flex items-center gap-2 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl font-bold text-sm hover:border-brand-primary hover:text-brand-primary disabled:opacity-50 transition-all"
+                  >
+                    {scanning ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Scanning...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Scan size={16} />
+                        <span>Start Scan</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          </div>
         </section>
 
         {/* Database Section */}
@@ -151,6 +318,32 @@ const SettingsView: React.FC = () => {
                     <>
                       <FolderPlus size={16} />
                       <span>Import Photos</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between pt-4 border-t border-light-border dark:border-dark-border">
+                <div>
+                  <h3 className="font-bold text-light-text-primary dark:text-dark-text-primary mb-1">Update Metadata</h3>
+                  <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
+                    Extract date and camera info from existing photos
+                  </p>
+                </div>
+                <button
+                  onClick={handleUpdateMetadata}
+                  disabled={updatingMetadata}
+                  className="flex items-center gap-2 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl font-bold text-sm hover:border-brand-primary hover:text-brand-primary disabled:opacity-50 transition-all"
+                >
+                  {updatingMetadata ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Updating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw size={16} />
+                      <span>Update</span>
                     </>
                   )}
                 </button>
