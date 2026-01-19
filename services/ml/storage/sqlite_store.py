@@ -103,6 +103,18 @@ class SQLiteStore:
                 FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE
             )
         """)
+        
+        # Scenes table (store scene detection results)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS scenes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL,
+                scene_label TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+            )
+        """)
 
         # Create indexes only if the tables and columns exist
         try:
@@ -138,6 +150,16 @@ class SQLiteStore:
             columns = [row[1] for row in cursor.fetchall()]
             if "face_id" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_face ON embeddings(face_id)")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("PRAGMA table_info(scenes)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "photo_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_scenes_photo ON scenes(photo_id)")
+            if "scene_label" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_scenes_label ON scenes(scene_label)")
         except sqlite3.OperationalError:
             pass
 
@@ -350,7 +372,7 @@ class SQLiteStore:
         return [dict(row) for row in rows]
 
     def get_objects_by_category(self, category: str) -> List[Dict]:
-        """Get all objects of a category."""
+        """Get all objects of a category (exact match)."""
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -358,6 +380,77 @@ class SQLiteStore:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def get_objects_by_pattern(self, pattern: str) -> List[Dict]:
+        """Get all objects matching a category pattern (LIKE search)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM objects WHERE category LIKE ?",
+            (f"%{pattern}%",)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def add_scene(self, photo_id: int, scene_label: str, confidence: float) -> int:
+        """Add a detected scene. Returns scene_id."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO scenes (photo_id, scene_label, confidence)
+            VALUES (?, ?, ?)
+            """,
+            (photo_id, scene_label, confidence),
+        )
+        scene_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return scene_id
+
+    def get_scenes_for_photo(self, photo_id: int) -> List[Dict]:
+        """Get all scenes for a photo."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM scenes WHERE photo_id = ? ORDER BY confidence DESC",
+            (photo_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_photos_by_scene(self, scene_label: str) -> List[int]:
+        """Get all photo IDs containing a specific scene."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT photo_id FROM scenes WHERE scene_label = ?",
+            (scene_label,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def get_all_scene_labels(self) -> List[str]:
+        """Get all unique scene labels."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT scene_label FROM scenes ORDER BY scene_label")
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def delete_scenes_for_photo(self, photo_id: int) -> None:
+        """Delete all scenes for a photo (e.g., before re-detecting)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM scenes WHERE photo_id = ?", (photo_id,))
+        conn.commit()
+        conn.close()
 
     def create_person(self, cluster_id: Optional[int] = None, name: Optional[str] = None) -> int:
         """Create a person entry. Returns person_id."""
@@ -372,6 +465,16 @@ class SQLiteStore:
         conn.commit()
         conn.close()
         return person_id
+    
+    def get_person_by_cluster_id(self, cluster_id: int) -> Optional[Dict]:
+        """Get a person by cluster_id. Returns None if not found."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM people WHERE cluster_id = ? LIMIT 1", (cluster_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
 
     def get_all_people(self) -> List[Dict]:
         """Get all people."""

@@ -12,13 +12,14 @@ from transformers import CLIPModel, CLIPProcessor
 class ImageEmbedder:
     """Generate image embeddings using CLIP for semantic search."""
 
-    def __init__(self, model_name: str = "openai/clip-vit-base-patch32"):
-        """Initialize CLIP embedder."""
+    def __init__(self, model_name: str = "openai/clip-vit-large-patch14"):
+        """Initialize CLIP embedder with larger, more accurate model."""
         self.model_name = model_name
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.embedding_dim = 512  # CLIP base model dimension
+        # CLIP large model has 768 dimensions (more expressive than base's 512)
+        self.embedding_dim = 768
 
     def _load_model(self) -> None:
         """Lazy load CLIP model."""

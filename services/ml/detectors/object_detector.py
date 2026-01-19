@@ -11,7 +11,8 @@ from ultralytics import YOLO
 class ObjectDetector:
     """Object detection using YOLOv8."""
 
-    # Simplified category mapping
+    # Enhanced category mapping - keep original YOLO classes for better searchability
+    # Map to both simplified category AND keep original class name
     CATEGORY_MAP = {
         "person": "person",
         "bicycle": "vehicle",
@@ -22,6 +23,11 @@ class ObjectDetector:
         "train": "vehicle",
         "truck": "vehicle",
         "boat": "vehicle",
+        "traffic light": "street",
+        "fire hydrant": "street",
+        "stop sign": "street",
+        "parking meter": "street",
+        "bench": "furniture",
         "bird": "animal",
         "cat": "animal",
         "dog": "animal",
@@ -32,9 +38,18 @@ class ObjectDetector:
         "bear": "animal",
         "zebra": "animal",
         "giraffe": "animal",
+        "backpack": "accessory",
+        "umbrella": "accessory",
+        "handbag": "accessory",
+        "tie": "accessory",
+        "suitcase": "accessory",
+        "frisbee": "sports",
+        "skis": "sports",
+        "snowboard": "sports",
         "sports ball": "sports",
         "kite": "sports",
         "baseball bat": "sports",
+        "baseball glove": "sports",
         "skateboard": "sports",
         "surfboard": "sports",
         "tennis racket": "sports",
@@ -51,9 +66,34 @@ class ObjectDetector:
         "orange": "food",
         "broccoli": "food",
         "carrot": "food",
+        "hot dog": "food",
         "pizza": "food",
         "donut": "food",
         "cake": "food",
+        "chair": "furniture",
+        "couch": "furniture",
+        "potted plant": "plant",  # KEY: Plants!
+        "bed": "furniture",
+        "dining table": "furniture",
+        "toilet": "bathroom",
+        "tv": "electronics",
+        "laptop": "electronics",
+        "mouse": "electronics",
+        "remote": "electronics",
+        "keyboard": "electronics",
+        "cell phone": "electronics",
+        "microwave": "appliance",
+        "oven": "appliance",
+        "toaster": "appliance",
+        "sink": "appliance",
+        "refrigerator": "appliance",
+        "book": "item",
+        "clock": "item",
+        "vase": "decoration",
+        "scissors": "tool",
+        "teddy bear": "toy",
+        "hair drier": "item",
+        "toothbrush": "item",
     }
 
     def __init__(self, confidence_threshold: float = 0.5, model_size: str = "n"):
@@ -75,6 +115,7 @@ class ObjectDetector:
         """
         Detect objects in an image.
         Returns list of (x, y, width, height, category, confidence) tuples.
+        Category format: "simplified_category:original_class" (e.g., "plant:potted plant")
         """
         import logging
         
@@ -96,9 +137,13 @@ class ObjectDetector:
                 class_name = self.model.names[class_id]
 
                 # Map to simplified category - skip if not in our category map
-                category = self.CATEGORY_MAP.get(class_name)
-                if category is None:
+                simplified_category = self.CATEGORY_MAP.get(class_name)
+                if simplified_category is None:
                     continue  # Skip objects that don't match known categories
+
+                # Store both simplified category and original class name
+                # Format: "simplified:original" (e.g., "plant:potted plant")
+                category = f"{simplified_category}:{class_name}"
 
                 width = int(x2 - x1)
                 height = int(y2 - y1)

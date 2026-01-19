@@ -33,6 +33,7 @@ from sklearn.cluster import DBSCAN
 
 from services.ml.detectors.face_detector import FaceDetector
 from services.ml.detectors.object_detector import ObjectDetector
+from services.ml.detectors.scene_detector import SceneDetector
 from services.ml.embeddings.face_embedding import FaceEmbedder
 from services.ml.embeddings.image_embedding import ImageEmbedder
 from services.ml.storage.faiss_index import FAISSIndex
@@ -94,6 +95,7 @@ class MLPipeline:
         # Initialize models (lazy loading)
         self.face_detector = FaceDetector()
         self.object_detector = ObjectDetector()
+        self.scene_detector = SceneDetector()
         self.face_embedder = FaceEmbedder()
         self.image_embedder = ImageEmbedder()
 
@@ -107,9 +109,9 @@ class MLPipeline:
             self.index.create_index("face", dimension=512, metric="cosine")
             self.index.save_index("face")
 
-        # Image embeddings: 512 dim, cosine similarity
+        # Image embeddings: 768 dim (CLIP-Large), cosine similarity
         if not self.index.load_index("image"):
-            self.index.create_index("image", dimension=512, metric="cosine")
+            self.index.create_index("image", dimension=768, metric="cosine")
             self.index.save_index("image")
 
     async def import_photo(self, photo_path: str) -> Dict:
@@ -250,6 +252,34 @@ class MLPipeline:
             import logging
             logging.warning(f"Image embedding failed for {photo_path}: {e}")
 
+        # Detect scenes (e.g., sunset, beach, mountain, etc.)
+        try:
+            scene_tags = self.scene_detector.get_all_scene_tags(photo_path)
+            results["scenes"] = []
+            for tag in scene_tags:
+                # Store with confidence 1.0 for simplified tags
+                scene_id = self.store.add_scene(
+                    photo_id=photo_id,
+                    scene_label=tag,
+                    confidence=1.0
+                )
+                results["scenes"].append(tag)
+            
+            # Also store the detailed scene detections
+            detailed_scenes = self.scene_detector.detect(photo_path, top_k=5)
+            for scene_label, confidence in detailed_scenes:
+                if confidence >= 0.1:  # Only store high-confidence scenes
+                    self.store.add_scene(
+                        photo_id=photo_id,
+                        scene_label=scene_label,
+                        confidence=confidence
+                    )
+        except Exception as e:
+            # Scene detection is optional
+            import logging
+            logging.warning(f"Scene detection failed for {photo_path}: {e}")
+            results["scenes"] = []
+
         return results
 
     async def process_photo(self, photo_path: str) -> Dict:
@@ -360,8 +390,11 @@ class MLPipeline:
 
         # Create person entries for each cluster
         # EDGE CASE: Single-face clusters are OK (keep_single_face_clusters=True)
+        # IMPORTANT: Reuse existing people with same cluster_id to avoid duplicates
         cluster_to_person = {}
         single_face_clusters = 0
+        new_people_created = 0
+        existing_people_reused = 0
         
         for cluster_label in unique_clusters:
             # Count faces in this cluster
@@ -370,12 +403,24 @@ class MLPipeline:
             if cluster_face_count == 1:
                 single_face_clusters += 1
             
-            # Create person (even for single-face clusters)
-            # Rationale: Better to split than incorrectly merge
-            person_id = self.store.create_person(
-                cluster_id=int(cluster_label),
-                name=None  # No default name - let UI assign
-            )
+            # Check if person with this cluster_id already exists
+            existing_person = self.store.get_person_by_cluster_id(int(cluster_label))
+            
+            if existing_person:
+                # Reuse existing person to avoid duplicates
+                person_id = existing_person['id']
+                existing_people_reused += 1
+                logging.info(f"Reusing existing person {person_id} for cluster {cluster_label}")
+            else:
+                # Create new person (even for single-face clusters)
+                # Rationale: Better to split than incorrectly merge
+                person_id = self.store.create_person(
+                    cluster_id=int(cluster_label),
+                    name=None  # No default name - let UI assign
+                )
+                new_people_created += 1
+                logging.info(f"Created new person {person_id} for cluster {cluster_label}")
+            
             cluster_to_person[cluster_label] = person_id
 
         # Assign faces to people based on clusters
@@ -398,6 +443,8 @@ class MLPipeline:
             "noise": noise_count,
             "low_confidence": low_confidence_count,
             "single_face_clusters": single_face_clusters,
+            "new_people_created": new_people_created,
+            "existing_people_reused": existing_people_reused,
             "total_processed": len(all_face_ids),
             "total_faces": len(embeddings_data)
         }

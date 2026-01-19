@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from services.api.routes import faces, objects, people, photos, scan, search, stats
+from services.api.routes import faces, objects, people, photos, scan, scenes, search, stats
 
 app = FastAPI(
     title="PhotoSense-AI API",
@@ -27,6 +27,7 @@ app.include_router(faces.router)
 app.include_router(scan.router)
 app.include_router(search.router)
 app.include_router(objects.router)
+app.include_router(scenes.router)
 app.include_router(stats.router)
 
 

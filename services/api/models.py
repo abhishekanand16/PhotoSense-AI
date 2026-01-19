@@ -41,6 +41,15 @@ class ObjectResponse(BaseModel):
     bbox_h: int
 
 
+class SceneResponse(BaseModel):
+    """Scene detection response."""
+
+    id: int
+    photo_id: int
+    scene_label: str
+    confidence: float
+
+
 class ScanRequest(BaseModel):
     """Request to scan a folder."""
 

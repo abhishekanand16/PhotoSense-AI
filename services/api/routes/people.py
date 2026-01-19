@@ -145,6 +145,40 @@ async def recluster_person(person_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/cleanup-duplicates")
+async def cleanup_duplicate_people(dry_run: bool = False):
+    """Clean up duplicate people with the same cluster_id.
+    
+    This merges people who have the same cluster_id, keeping the oldest person
+    and merging all others into it. Also removes orphaned people with no faces.
+    
+    Args:
+        dry_run: If True, only reports what would be done without making changes
+        
+    Returns:
+        Statistics about the cleanup operation
+    """
+    try:
+        from services.ml.cleanup_duplicates import merge_duplicate_people, cleanup_orphaned_people
+        
+        store = SQLiteStore()
+        
+        # Step 1: Merge duplicate people
+        merge_result = merge_duplicate_people(store, dry_run=dry_run)
+        
+        # Step 2: Clean up orphaned people
+        orphan_result = cleanup_orphaned_people(store, dry_run=dry_run)
+        
+        return {
+            "status": "success",
+            "merge_result": merge_result,
+            "orphan_result": orphan_result,
+            "dry_run": dry_run
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{person_id}/thumbnail")
 async def get_person_thumbnail(person_id: int, size: int = 200):
     """Get a cropped face thumbnail for a person.
