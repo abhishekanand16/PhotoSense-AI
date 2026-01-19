@@ -33,7 +33,7 @@ from sklearn.cluster import DBSCAN
 
 from services.ml.detectors.face_detector import FaceDetector
 from services.ml.detectors.object_detector import ObjectDetector
-from services.ml.detectors.scene_detector import SceneDetector
+from services.ml.detectors.scene_detector import SceneDetector  # Places365 - now installed!
 from services.ml.embeddings.face_embedding import FaceEmbedder
 from services.ml.embeddings.image_embedding import ImageEmbedder
 from services.ml.storage.faiss_index import FAISSIndex
@@ -95,7 +95,7 @@ class MLPipeline:
         # Initialize models (lazy loading)
         self.face_detector = FaceDetector()
         self.object_detector = ObjectDetector()
-        self.scene_detector = SceneDetector()
+        self.scene_detector = SceneDetector()  # Places365 - now installed!
         self.face_embedder = FaceEmbedder()
         self.image_embedder = ImageEmbedder()
 
@@ -252,10 +252,10 @@ class MLPipeline:
             import logging
             logging.warning(f"Image embedding failed for {photo_path}: {e}")
 
-        # Detect scenes (e.g., sunset, beach, mountain, etc.)
+        # Detect scenes using Places365 (e.g., sunset, beach, mountain, etc.)
+        results["scenes"] = []
         try:
             scene_tags = self.scene_detector.get_all_scene_tags(photo_path)
-            results["scenes"] = []
             for tag in scene_tags:
                 # Store with confidence 1.0 for simplified tags
                 scene_id = self.store.add_scene(
@@ -268,7 +268,7 @@ class MLPipeline:
             # Also store the detailed scene detections
             detailed_scenes = self.scene_detector.detect(photo_path, top_k=5)
             for scene_label, confidence in detailed_scenes:
-                if confidence >= 0.1:  # Only store high-confidence scenes
+                if confidence >= 0.1:  # Store high-confidence scenes
                     self.store.add_scene(
                         photo_id=photo_id,
                         scene_label=scene_label,

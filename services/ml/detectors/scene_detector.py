@@ -80,18 +80,38 @@ class SceneDetector:
             
             # Load scene labels with offline fallback
             import urllib.request
-            label_url = 'https://raw.githubusercontent.com/csailvision/places365/master/categories_places365.txt'
-            try:
-                with urllib.request.urlopen(label_url, timeout=10) as response:
-                    self.labels = [line.decode('utf-8').strip().split(' ')[0][3:] 
-                                 for line in response.readlines()]
-            except Exception as e:
-                logging.warning(f"Could not load Places365 labels from URL: {e}, using offline fallback")
-                # Try loading from local file if it exists
-                local_labels_path = os.path.join(os.path.dirname(__file__), 'places365_labels.txt')
-                if os.path.exists(local_labels_path):
-                    with open(local_labels_path, 'r') as f:
-                        self.labels = [line.strip().split(' ')[0][3:] for line in f.readlines()]
+            local_labels_path = os.path.join(os.path.dirname(__file__), 'places365_labels.txt')
+            
+            # First try local file (faster and more reliable)
+            if os.path.exists(local_labels_path):
+                with open(local_labels_path, 'r') as f:
+                    self.labels = []
+                    for line in f.readlines():
+                        # Format: "/a/airfield 0" -> "airfield"
+                        parts = line.strip().split(' ')
+                        if parts:
+                            label = parts[0]
+                            # Remove leading "/a/", "/b/", etc.
+                            if label.startswith('/'):
+                                label = label.split('/', 2)[-1]  # Get everything after "/x/"
+                            self.labels.append(label)
+                logging.info(f"Loaded {len(self.labels)} Places365 labels from local file")
+            else:
+                # Fallback to URL if local file doesn't exist
+                label_url = 'https://raw.githubusercontent.com/csailvision/places365/master/categories_places365.txt'
+                try:
+                    with urllib.request.urlopen(label_url, timeout=10) as response:
+                        self.labels = []
+                        for line in response.readlines():
+                            parts = line.decode('utf-8').strip().split(' ')
+                            if parts:
+                                label = parts[0]
+                                if label.startswith('/'):
+                                    label = label.split('/', 2)[-1]
+                                self.labels.append(label)
+                except Exception as e:
+                    logging.warning(f"Could not load Places365 labels: {e}")
+                    self.labels = [f"scene_{i}" for i in range(365)]
                 else:
                     # Ultimate fallback: create minimal labels
                     self.labels = [f"scene_{i}" for i in range(365)]

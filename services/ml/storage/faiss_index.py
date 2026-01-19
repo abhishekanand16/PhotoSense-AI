@@ -106,6 +106,10 @@ class FAISSIndex:
 
         index = self._indices[embedding_type]
         id_map = self._id_maps[embedding_type]
+        
+        # Check if index is empty
+        if index.ntotal == 0:
+            return np.array([]), np.array([])
 
         # Normalize for cosine similarity if needed
         if isinstance(index, faiss.IndexFlatIP):
@@ -114,7 +118,13 @@ class FAISSIndex:
             query_vector = query_vector.flatten()
 
         query_vector = query_vector.astype(np.float32).reshape(1, -1)
-        distances, faiss_ids = index.search(query_vector, k)
+        
+        # Limit k to available vectors
+        actual_k = min(k, index.ntotal)
+        if actual_k == 0:
+            return np.array([]), np.array([])
+            
+        distances, faiss_ids = index.search(query_vector, actual_k)
 
         # Convert FAISS IDs to entity IDs
         entity_ids = np.array([id_map.get(int(fid), -1) for fid in faiss_ids[0]])
