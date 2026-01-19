@@ -12,13 +12,14 @@ from transformers import CLIPModel, CLIPProcessor
 class ImageEmbedder:
     """Generate image embeddings using CLIP for semantic search."""
 
-    def __init__(self, model_name: str = "openai/clip-vit-base-patch32"):
-        """Initialize CLIP embedder."""
+    def __init__(self, model_name: str = "openai/clip-vit-large-patch14"):
+        """Initialize CLIP embedder with larger, more accurate model."""
         self.model_name = model_name
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.embedding_dim = 512  # CLIP base model dimension
+        # CLIP large model has 768 dimensions (more expressive than base's 512)
+        self.embedding_dim = 768
 
     def _load_model(self) -> None:
         """Lazy load CLIP model."""
@@ -30,34 +31,46 @@ class ImageEmbedder:
     def embed(self, image_path: str) -> np.ndarray:
         """
         Generate embedding for an image.
-        Returns: 512-dimensional embedding vector.
+        Returns: 768-dimensional embedding vector (CLIP-Large).
         """
         self._load_model()
 
-        image = Image.open(image_path).convert("RGB")
-        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+        try:
+            image = Image.open(image_path).convert("RGB")
+            inputs = self.processor(images=image, return_tensors="pt").to(self.device)
 
-        with torch.no_grad():
-            image_features = self.model.get_image_features(**inputs)
-            embedding = image_features[0].cpu().numpy()
+            with torch.no_grad():
+                image_features = self.model.get_image_features(**inputs)
+                embedding = image_features[0].cpu().numpy()
 
-        # Normalize
-        embedding = embedding / np.linalg.norm(embedding)
-        return embedding.astype(np.float32)
+            # Normalize
+            embedding = embedding / np.linalg.norm(embedding)
+            return embedding.astype(np.float32)
+        except Exception as e:
+            import logging
+            logging.error(f"Image embedding failed for {image_path}: {e}")
+            # Return zero vector as fallback
+            return np.zeros(self.embedding_dim, dtype=np.float32)
 
     def embed_text(self, text: str) -> np.ndarray:
         """
         Generate embedding for text query.
-        Returns: 512-dimensional embedding vector.
+        Returns: 768-dimensional embedding vector (CLIP-Large).
         """
         self._load_model()
 
-        inputs = self.processor(text=text, return_tensors="pt", padding=True).to(self.device)
+        try:
+            inputs = self.processor(text=text, return_tensors="pt", padding=True).to(self.device)
 
-        with torch.no_grad():
-            text_features = self.model.get_text_features(**inputs)
-            embedding = text_features[0].cpu().numpy()
+            with torch.no_grad():
+                text_features = self.model.get_text_features(**inputs)
+                embedding = text_features[0].cpu().numpy()
 
-        # Normalize
-        embedding = embedding / np.linalg.norm(embedding)
-        return embedding.astype(np.float32)
+            # Normalize
+            embedding = embedding / np.linalg.norm(embedding)
+            return embedding.astype(np.float32)
+        except Exception as e:
+            import logging
+            logging.error(f"Text embedding failed for '{text}': {e}")
+            # Return zero vector as fallback
+            return np.zeros(self.embedding_dim, dtype=np.float32)

@@ -129,27 +129,39 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         # Progress: 50% - 100%
         # ============================================
         processed = 0
+        total_faces = 0
+        total_objects = 0
         total_to_process = len(imported_photos)
         
         for idx, (photo_id, image_path) in enumerate(imported_photos):
             try:
-                await pipeline.process_photo_ml(photo_id, image_path)
+                result = await pipeline.process_photo_ml(photo_id, image_path)
                 processed += 1
+                faces_found = len(result.get("faces", []))
+                objects_found = len(result.get("objects", []))
+                total_faces += faces_found
+                total_objects += objects_found
+                logging.info(f"Processed {image_path}: {faces_found} faces, {objects_found} objects")
             except Exception as e:
-                logging.error(f"Failed to process ML for {image_path}: {str(e)}")
+                logging.error(f"Failed to process ML for {image_path}: {str(e)}", exc_info=True)
 
             # Progress for Phase 2: 50% to 100%
             _jobs[job_id]["progress"] = 0.5 + (idx + 1) / total_to_process * 0.5 if total_to_process > 0 else 1.0
             _jobs[job_id]["message"] = f"Scanning faces... {idx + 1}/{total_to_process}"
 
-        # Run clustering
+        # Run clustering (always cluster after bulk import)
         _jobs[job_id]["message"] = "Organizing faces..."
-        await pipeline.cluster_faces()
-
+        cluster_result = await pipeline.cluster_faces()
+        
         _jobs[job_id]["status"] = "completed"
         _jobs[job_id]["progress"] = 1.0
         _jobs[job_id]["phase"] = "complete"
-        _jobs[job_id]["message"] = f"Completed: {len(imported_photos)} photos imported, {processed} scanned"
+        
+        # Build summary message
+        clusters = cluster_result.get("clusters", 0)
+        faces_clustered = cluster_result.get("faces_clustered", 0)
+        _jobs[job_id]["message"] = f"Completed: {len(imported_photos)} photos, {processed} scanned, {total_faces} faces, {total_objects} objects, {clusters} people found"
+        logging.info(f"Scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 
     except Exception as e:
         _jobs[job_id]["status"] = "error"
@@ -218,6 +230,8 @@ async def scan_faces_async(job_id: str):
         _jobs[job_id]["message"] = f"Found {total} photos to scan"
         
         processed = 0
+        total_faces = 0
+        total_objects = 0
         for idx, photo in enumerate(photos):
             try:
                 photo_id = photo["id"]
@@ -230,22 +244,30 @@ async def scan_faces_async(job_id: str):
                     continue
                 
                 # Run face/object detection
-                await pipeline.process_photo_ml(photo_id, photo_path)
+                result = await pipeline.process_photo_ml(photo_id, photo_path)
                 processed += 1
+                faces_found = len(result.get("faces", []))
+                objects_found = len(result.get("objects", []))
+                total_faces += faces_found
+                total_objects += objects_found
+                logging.info(f"Processed {photo_path}: {faces_found} faces, {objects_found} objects")
             except Exception as e:
-                logging.error(f"Failed to scan faces for photo {photo.get('id')}: {str(e)}")
+                logging.error(f"Failed to scan faces for photo {photo.get('id')}: {str(e)}", exc_info=True)
 
             _jobs[job_id]["progress"] = (idx + 1) / total if total > 0 else 1.0
             _jobs[job_id]["message"] = f"Scanning faces... {idx + 1}/{total}"
 
         # Run clustering
         _jobs[job_id]["message"] = "Organizing faces..."
-        await pipeline.cluster_faces()
+        cluster_result = await pipeline.cluster_faces()
 
         _jobs[job_id]["status"] = "completed"
         _jobs[job_id]["progress"] = 1.0
         _jobs[job_id]["phase"] = "complete"
-        _jobs[job_id]["message"] = f"Completed: {processed} photos scanned"
+        
+        clusters = cluster_result.get("clusters", 0)
+        _jobs[job_id]["message"] = f"Completed: {processed} photos scanned, {total_faces} faces, {total_objects} objects, {clusters} people found"
+        logging.info(f"Face scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 
     except Exception as e:
         _jobs[job_id]["status"] = "error"

@@ -25,3 +25,5 @@ faiss-cpu>=1.7.4
 
 # Clustering
 scikit-learn>=1.3.0
+# Optional: hdbscan (better than DBSCAN for face clustering)
+# pip install hdbscan

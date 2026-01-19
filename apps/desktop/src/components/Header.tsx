@@ -24,6 +24,23 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [processingStatus, setProcessingStatus] = useState<"idle" | "scanning">("idle");
   const [scanProgress, setScanProgress] = useState(0);
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+
+  // Check backend connection status periodically
+  useEffect(() => {
+    const checkConnection = async () => {
+      const connected = await healthApi.check();
+      setIsBackendConnected(connected);
+    };
+
+    // Check immediately on mount
+    checkConnection();
+
+    // Check every 5 seconds
+    const interval = setInterval(checkConnection, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const handleAddPhotos = async () => {
@@ -149,9 +166,15 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
               </>
             ) : (
               <>
-                <Circle size={8} className="fill-emerald-500 text-emerald-500" />
+                <Circle 
+                  size={8} 
+                  className={isBackendConnected 
+                    ? "fill-emerald-500 text-emerald-500" 
+                    : "fill-red-500 text-red-500"
+                  } 
+                />
                 <span className="text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-wider">
-                  Ready
+                  {isBackendConnected ? "Ready" : "Disconnected"}
                 </span>
               </>
             )}

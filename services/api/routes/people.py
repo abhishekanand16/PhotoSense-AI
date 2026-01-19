@@ -1,8 +1,13 @@
 """People/cluster-related endpoints."""
 
+import io
+from pathlib import Path
 from typing import List
 
+import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from services.api.models import MergePeopleRequest, PersonResponse, PhotoResponse, UpdatePersonRequest
 from services.ml.storage.sqlite_store import SQLiteStore
@@ -16,16 +21,18 @@ async def list_people():
     store = SQLiteStore()
     try:
         people = store.get_all_people()
-        # Add face counts
+        # Add photo counts (unique photos, not face count)
         result = []
         for person in people:
             faces = store.get_faces_for_person(person["id"])
+            # Count unique photos, not faces (a person can appear multiple times in one photo)
+            unique_photo_ids = {face["photo_id"] for face in faces}
             result.append(
                 PersonResponse(
                     id=person["id"],
                     cluster_id=person.get("cluster_id"),
                     name=person.get("name"),
-                    face_count=len(faces),
+                    face_count=len(unique_photo_ids),  # This is actually photo count now
                 )
             )
         return result
@@ -43,11 +50,13 @@ async def update_person(person_id: int, request: UpdatePersonRequest):
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
         faces = store.get_faces_for_person(person_id)
+        # Count unique photos, not faces
+        unique_photo_ids = {face["photo_id"] for face in faces}
         return PersonResponse(
             id=person["id"],
             cluster_id=person.get("cluster_id"),
             name=person.get("name"),
-            face_count=len(faces),
+            face_count=len(unique_photo_ids),
         )
     except HTTPException:
         raise
@@ -91,6 +100,161 @@ async def merge_people(request: MergePeopleRequest):
             raise HTTPException(status_code=400, detail="Cannot merge person with itself")
         store.merge_people(request.source_person_id, request.target_person_id)
         return {"status": "success", "message": "People merged successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{person_id}")
+async def delete_person(person_id: int):
+    """Delete a person and unassign all their faces."""
+    store = SQLiteStore()
+    try:
+        deleted = store.delete_person(person_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Person not found")
+        return {"status": "success", "message": "Person deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{person_id}/faces")
+async def get_faces_for_person(person_id: int):
+    """Get all faces for a specific person."""
+    store = SQLiteStore()
+    try:
+        faces = store.get_faces_for_person(person_id)
+        return faces
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{person_id}/recluster")
+async def recluster_person(person_id: int):
+    """Re-cluster faces for a specific person (split if needed)."""
+    from services.ml.pipeline import MLPipeline
+    
+    try:
+        pipeline = MLPipeline()
+        result = await pipeline.recluster_person_faces(person_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cleanup-duplicates")
+async def cleanup_duplicate_people(dry_run: bool = False):
+    """Clean up duplicate people with the same cluster_id.
+    
+    This merges people who have the same cluster_id, keeping the oldest person
+    and merging all others into it. Also removes orphaned people with no faces.
+    
+    Args:
+        dry_run: If True, only reports what would be done without making changes
+        
+    Returns:
+        Statistics about the cleanup operation
+    """
+    try:
+        from services.ml.cleanup_duplicates import merge_duplicate_people, cleanup_orphaned_people
+        
+        store = SQLiteStore()
+        
+        # Step 1: Merge duplicate people
+        merge_result = merge_duplicate_people(store, dry_run=dry_run)
+        
+        # Step 2: Clean up orphaned people
+        orphan_result = cleanup_orphaned_people(store, dry_run=dry_run)
+        
+        return {
+            "status": "success",
+            "merge_result": merge_result,
+            "orphan_result": orphan_result,
+            "dry_run": dry_run
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{person_id}/thumbnail")
+async def get_person_thumbnail(person_id: int, size: int = 200):
+    """Get a cropped face thumbnail for a person.
+    
+    Returns the highest-confidence face crop for this person as a JPEG image.
+    The crop is square and centered on the face with some padding.
+    """
+    store = SQLiteStore()
+    try:
+        # Get all faces for this person
+        faces = store.get_faces_for_person(person_id)
+        if not faces:
+            raise HTTPException(status_code=404, detail="No faces found for this person")
+        
+        # Sort by confidence and get the best face
+        faces_sorted = sorted(faces, key=lambda f: f.get('confidence', 0), reverse=True)
+        best_face = faces_sorted[0]
+        
+        # Get the photo for this face
+        photo = store.get_photo(best_face['photo_id'])
+        if not photo:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        
+        photo_path = photo['file_path']
+        if not Path(photo_path).exists():
+            raise HTTPException(status_code=404, detail="Photo file not found")
+        
+        # Read the image
+        img = cv2.imread(photo_path)
+        if img is None:
+            raise HTTPException(status_code=500, detail="Could not read image")
+        
+        img_height, img_width = img.shape[:2]
+        
+        # Get face bounding box
+        x = best_face['bbox_x']
+        y = best_face['bbox_y']
+        w = best_face['bbox_w']
+        h = best_face['bbox_h']
+        
+        # Add padding (30% on each side) and make it square
+        padding = 0.3
+        face_size = max(w, h)
+        padded_size = int(face_size * (1 + 2 * padding))
+        
+        # Center the crop on the face
+        center_x = x + w // 2
+        center_y = y + h // 2
+        
+        # Calculate crop coordinates
+        crop_x1 = max(0, center_x - padded_size // 2)
+        crop_y1 = max(0, center_y - padded_size // 2)
+        crop_x2 = min(img_width, crop_x1 + padded_size)
+        crop_y2 = min(img_height, crop_y1 + padded_size)
+        
+        # Adjust if we hit the edge
+        if crop_x2 - crop_x1 < padded_size:
+            crop_x1 = max(0, crop_x2 - padded_size)
+        if crop_y2 - crop_y1 < padded_size:
+            crop_y1 = max(0, crop_y2 - padded_size)
+        
+        # Crop the face
+        face_crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
+        
+        # Resize to requested size (square)
+        face_crop = cv2.resize(face_crop, (size, size), interpolation=cv2.INTER_AREA)
+        
+        # Convert to JPEG
+        _, buffer = cv2.imencode('.jpg', face_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        
+        return Response(
+            content=buffer.tobytes(),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=3600"}  # Cache for 1 hour
+        )
+        
     except HTTPException:
         raise
     except Exception as e:

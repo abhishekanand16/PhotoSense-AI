@@ -99,8 +99,21 @@ const PeopleView: React.FC = () => {
             hover={!editingId}
             onClick={() => handlePersonClick(person)}
           >
-            <div className="aspect-square bg-brand-primary/5 dark:bg-brand-primary/10 rounded-2xl mb-4 flex items-center justify-center text-brand-primary group-hover:scale-105 transition-transform duration-500">
-              <User size={48} strokeWidth={1} className="opacity-40 group-hover:opacity-100 transition-opacity" />
+            <div className="aspect-square bg-brand-primary/5 dark:bg-brand-primary/10 rounded-2xl mb-4 flex items-center justify-center text-brand-primary group-hover:scale-105 transition-transform duration-500 overflow-hidden">
+              {person.thumbnail_url ? (
+                <img 
+                  src={person.thumbnail_url}
+                  alt={person.name || "Unnamed Person"}
+                  className="w-full h-full object-cover rounded-2xl"
+                  onError={(e) => {
+                    // Fallback to icon if image fails to load
+                    (e.target as HTMLImageElement).style.display = 'none';
+                    (e.target as HTMLImageElement).parentElement!.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="opacity-40"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
+                  }}
+                />
+              ) : (
+                <User size={48} strokeWidth={1} className="opacity-40 group-hover:opacity-100 transition-opacity" />
+              )}
             </div>
 
             {editingId === person.id ? (

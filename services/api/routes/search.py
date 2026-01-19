@@ -6,13 +6,16 @@ from fastapi import APIRouter, HTTPException
 
 from services.api.models import PhotoResponse, SearchRequest
 from services.ml.storage.sqlite_store import SQLiteStore
+from services.ml.utils.search_utils import SearchQueryProcessor
 
 router = APIRouter(prefix="/search", tags=["search"])
 
 
 @router.post("", response_model=List[PhotoResponse])
 async def search_photos(request: SearchRequest):
-    """Search photos by various criteria."""
+    """Enhanced search with scene detection, object detection, and CLIP fallback."""
+    import logging
+    
     store = SQLiteStore()
     # Lazy import to avoid blocking server startup
     from services.ml.pipeline import MLPipeline
@@ -22,10 +25,58 @@ async def search_photos(request: SearchRequest):
         # Start with all photos or text search results
         candidate_ids = None
 
-        # Text-based semantic search
+        # Text-based search with intelligent query processing
         if request.query:
-            photo_ids = await pipeline.search_similar_images(request.query, k=50)
-            candidate_ids = set(photo_ids)
+            # Process query using SearchQueryProcessor
+            query_info = SearchQueryProcessor.process_query(request.query)
+            scene_tags = query_info['scene_tags']
+            object_patterns = query_info['object_patterns']
+            should_use_clip = query_info['should_use_clip']
+            
+            # Priority 1: Scene detection matches
+            scene_photo_ids = set()
+            if scene_tags:
+                for tag in scene_tags:
+                    try:
+                        scene_photo_ids.update(store.get_photos_by_scene(tag))
+                    except Exception as e:
+                        logging.warning(f"Scene search failed for tag '{tag}': {e}")
+            
+            # Priority 2: Object detection matches
+            object_photo_ids = set()
+            if object_patterns:
+                # Search for objects matching any of the patterns
+                for pattern in object_patterns:
+                    try:
+                        # Use pattern matching to find objects
+                        # This searches the "simplified:original" format
+                        objects = store.get_objects_by_pattern(pattern)
+                        for obj in objects:
+                            object_photo_ids.add(obj["photo_id"])
+                    except Exception as e:
+                        logging.warning(f"Object search failed for pattern '{pattern}': {e}")
+            
+            # Combine results (OR logic - photos matching scenes OR objects)
+            if scene_photo_ids or object_photo_ids:
+                candidate_ids = scene_photo_ids | object_photo_ids
+            
+            # Priority 3: CLIP semantic search fallback
+            if not candidate_ids or should_use_clip:
+                try:
+                    # Use CLIP for complex queries or when no matches found
+                    photo_ids = await pipeline.search_similar_images(request.query, k=50)
+                    clip_ids = set(photo_ids)
+                    
+                    if candidate_ids:
+                        # Combine with existing results (union)
+                        candidate_ids = candidate_ids | clip_ids
+                    else:
+                        candidate_ids = clip_ids
+                except Exception as e:
+                    logging.warning(f"CLIP search failed: {e}")
+                    # If CLIP fails and we have no results, return empty
+                    if not candidate_ids:
+                        candidate_ids = set()
         else:
             # If no query, start with all photos
             all_photos = store.get_all_photos()

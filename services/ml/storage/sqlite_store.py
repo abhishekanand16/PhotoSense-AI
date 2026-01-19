@@ -92,6 +92,29 @@ class SQLiteStore:
                 FOREIGN KEY (face_id) REFERENCES faces(id)
             )
         """)
+        
+        # Embeddings table (store face embeddings as blobs for retrieval)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                face_id INTEGER UNIQUE NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Scenes table (store scene detection results)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS scenes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL,
+                scene_label TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+            )
+        """)
 
         # Create indexes only if the tables and columns exist
         try:
@@ -107,6 +130,8 @@ class SQLiteStore:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
             if "person_id" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
+            if "cluster_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id)")
         except sqlite3.OperationalError:
             pass
         
@@ -117,6 +142,24 @@ class SQLiteStore:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_objects_photo ON objects(photo_id)")
             if "category" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_objects_category ON objects(category)")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("PRAGMA table_info(embeddings)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "face_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_face ON embeddings(face_id)")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("PRAGMA table_info(scenes)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "photo_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_scenes_photo ON scenes(photo_id)")
+            if "scene_label" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_scenes_label ON scenes(scene_label)")
         except sqlite3.OperationalError:
             pass
 
@@ -329,7 +372,7 @@ class SQLiteStore:
         return [dict(row) for row in rows]
 
     def get_objects_by_category(self, category: str) -> List[Dict]:
-        """Get all objects of a category."""
+        """Get all objects of a category (exact match)."""
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -338,18 +381,100 @@ class SQLiteStore:
         conn.close()
         return [dict(row) for row in rows]
 
+    def get_objects_by_pattern(self, pattern: str) -> List[Dict]:
+        """Get all objects matching a category pattern (LIKE search)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM objects WHERE category LIKE ?",
+            (f"%{pattern}%",)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def add_scene(self, photo_id: int, scene_label: str, confidence: float) -> int:
+        """Add a detected scene. Returns scene_id."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO scenes (photo_id, scene_label, confidence)
+            VALUES (?, ?, ?)
+            """,
+            (photo_id, scene_label, confidence),
+        )
+        scene_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return scene_id
+
+    def get_scenes_for_photo(self, photo_id: int) -> List[Dict]:
+        """Get all scenes for a photo."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM scenes WHERE photo_id = ? ORDER BY confidence DESC",
+            (photo_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_photos_by_scene(self, scene_label: str) -> List[int]:
+        """Get all photo IDs containing a specific scene."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT photo_id FROM scenes WHERE scene_label = ?",
+            (scene_label,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def get_all_scene_labels(self) -> List[str]:
+        """Get all unique scene labels."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT scene_label FROM scenes ORDER BY scene_label")
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def delete_scenes_for_photo(self, photo_id: int) -> None:
+        """Delete all scenes for a photo (e.g., before re-detecting)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM scenes WHERE photo_id = ?", (photo_id,))
+        conn.commit()
+        conn.close()
+
     def create_person(self, cluster_id: Optional[int] = None, name: Optional[str] = None) -> int:
         """Create a person entry. Returns person_id."""
         conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
+        now = datetime.now().isoformat()
         cursor.execute(
-            "INSERT INTO people (cluster_id, name) VALUES (?, ?)",
-            (cluster_id, name),
+            "INSERT INTO people (cluster_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (cluster_id, name, now, now),
         )
         person_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return person_id
+    
+    def get_person_by_cluster_id(self, cluster_id: int) -> Optional[Dict]:
+        """Get a person by cluster_id. Returns None if not found."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM people WHERE cluster_id = ? LIMIT 1", (cluster_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
 
     def get_all_people(self) -> List[Dict]:
         """Get all people."""
@@ -435,7 +560,9 @@ class SQLiteStore:
         stats["total_photos"] = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM faces")
         stats["total_faces"] = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM objects")
+        # Exclude 'person' and 'other' categories from objects count
+        # 'person' is handled in People tab, 'other' is too generic to be useful
+        cursor.execute("SELECT COUNT(*) FROM objects WHERE category NOT IN ('person', 'other')")
         stats["total_objects"] = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM people")
         stats["total_people"] = cursor.fetchone()[0]
@@ -443,3 +570,147 @@ class SQLiteStore:
         stats["labeled_faces"] = cursor.fetchone()[0]
         conn.close()
         return stats
+    
+    def store_embedding(self, face_id: int, embedding: np.ndarray) -> int:
+        """Store face embedding. Returns embedding_id."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        # Convert numpy array to bytes
+        embedding_bytes = embedding.tobytes()
+        cursor.execute(
+            "INSERT OR REPLACE INTO embeddings (face_id, embedding) VALUES (?, ?)",
+            (face_id, embedding_bytes),
+        )
+        embedding_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return embedding_id
+    
+    def get_embedding(self, face_id: int) -> Optional[np.ndarray]:
+        """Retrieve embedding for a face."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT embedding FROM embeddings WHERE face_id = ?", (face_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row is None:
+            return None
+        
+        # Convert bytes back to numpy array (512-dim float32)
+        embedding = np.frombuffer(row[0], dtype=np.float32)
+        return embedding
+    
+    def get_all_embeddings_with_faces(self) -> List[Tuple[int, np.ndarray]]:
+        """Get all face embeddings with face_ids. Returns list of (face_id, embedding)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT face_id, embedding FROM embeddings")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        results = []
+        for face_id, embedding_bytes in rows:
+            embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
+            results.append((face_id, embedding))
+        
+        return results
+    
+    def delete_face(self, face_id: int) -> bool:
+        """Delete a face and its embedding. Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Delete feedback for this face
+            cursor.execute("DELETE FROM feedback WHERE face_id = ?", (face_id,))
+            # Delete embedding
+            cursor.execute("DELETE FROM embeddings WHERE face_id = ?", (face_id,))
+            # Delete face
+            cursor.execute("DELETE FROM faces WHERE id = ?", (face_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def delete_person(self, person_id: int) -> bool:
+        """Delete a person and unassign all faces. Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Unassign faces from this person
+            cursor.execute("UPDATE faces SET person_id = NULL WHERE person_id = ?", (person_id,))
+            # Delete person
+            cursor.execute("DELETE FROM people WHERE id = ?", (person_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def get_person(self, person_id: int) -> Optional[Dict]:
+        """Get person by ID."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM people WHERE id = ?", (person_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    def update_faces_cluster(self, face_ids: List[int], cluster_id: int) -> None:
+        """Batch update cluster for multiple faces."""
+        if not face_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(face_ids))
+        cursor.execute(f"UPDATE faces SET cluster_id = ? WHERE id IN ({placeholders})", [cluster_id] + face_ids)
+        conn.commit()
+        conn.close()
+    
+    def update_faces_person(self, face_ids: List[int], person_id: Optional[int]) -> None:
+        """Batch update person for multiple faces."""
+        if not face_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(face_ids))
+        cursor.execute(f"UPDATE faces SET person_id = ? WHERE id IN ({placeholders})", [person_id] + face_ids)
+        conn.commit()
+        conn.close()
+    
+    def get_face(self, face_id: int) -> Optional[Dict]:
+        """Get face by ID."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM faces WHERE id = ?", (face_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    def get_faces_without_clusters(self) -> List[Dict]:
+        """Get all faces that haven't been clustered yet."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM faces WHERE cluster_id IS NULL")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    
+    def count_faces_without_clusters(self) -> int:
+        """Count faces that haven't been clustered yet."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
