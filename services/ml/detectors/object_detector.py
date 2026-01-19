@@ -76,8 +76,15 @@ class ObjectDetector:
         Detect objects in an image.
         Returns list of (x, y, width, height, category, confidence) tuples.
         """
+        import logging
+        
         self._load_model()
-        results = self.model(image_path, conf=self.confidence_threshold, verbose=False)
+        
+        try:
+            results = self.model(image_path, conf=self.confidence_threshold, verbose=False)
+        except Exception as e:
+            logging.error(f"Object detection failed for {image_path}: {e}")
+            return []
 
         detections = []
         for result in results:
@@ -94,5 +101,6 @@ class ObjectDetector:
                 width = int(x2 - x1)
                 height = int(y2 - y1)
                 detections.append((int(x1), int(y1), width, height, category, confidence))
-
+        
+        logging.info(f"Detected {len(detections)} objects in {image_path}")
         return detections

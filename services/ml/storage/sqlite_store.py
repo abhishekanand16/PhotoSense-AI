@@ -92,6 +92,17 @@ class SQLiteStore:
                 FOREIGN KEY (face_id) REFERENCES faces(id)
             )
         """)
+        
+        # Embeddings table (store face embeddings as blobs for retrieval)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                face_id INTEGER UNIQUE NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE
+            )
+        """)
 
         # Create indexes only if the tables and columns exist
         try:
@@ -107,6 +118,8 @@ class SQLiteStore:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
             if "person_id" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
+            if "cluster_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id)")
         except sqlite3.OperationalError:
             pass
         
@@ -117,6 +130,14 @@ class SQLiteStore:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_objects_photo ON objects(photo_id)")
             if "category" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_objects_category ON objects(category)")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("PRAGMA table_info(embeddings)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "face_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_face ON embeddings(face_id)")
         except sqlite3.OperationalError:
             pass
 
@@ -342,9 +363,10 @@ class SQLiteStore:
         """Create a person entry. Returns person_id."""
         conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
+        now = datetime.now().isoformat()
         cursor.execute(
-            "INSERT INTO people (cluster_id, name) VALUES (?, ?)",
-            (cluster_id, name),
+            "INSERT INTO people (cluster_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (cluster_id, name, now, now),
         )
         person_id = cursor.lastrowid
         conn.commit()
@@ -443,3 +465,147 @@ class SQLiteStore:
         stats["labeled_faces"] = cursor.fetchone()[0]
         conn.close()
         return stats
+    
+    def store_embedding(self, face_id: int, embedding: np.ndarray) -> int:
+        """Store face embedding. Returns embedding_id."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        # Convert numpy array to bytes
+        embedding_bytes = embedding.tobytes()
+        cursor.execute(
+            "INSERT OR REPLACE INTO embeddings (face_id, embedding) VALUES (?, ?)",
+            (face_id, embedding_bytes),
+        )
+        embedding_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return embedding_id
+    
+    def get_embedding(self, face_id: int) -> Optional[np.ndarray]:
+        """Retrieve embedding for a face."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT embedding FROM embeddings WHERE face_id = ?", (face_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row is None:
+            return None
+        
+        # Convert bytes back to numpy array (512-dim float32)
+        embedding = np.frombuffer(row[0], dtype=np.float32)
+        return embedding
+    
+    def get_all_embeddings_with_faces(self) -> List[Tuple[int, np.ndarray]]:
+        """Get all face embeddings with face_ids. Returns list of (face_id, embedding)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT face_id, embedding FROM embeddings")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        results = []
+        for face_id, embedding_bytes in rows:
+            embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
+            results.append((face_id, embedding))
+        
+        return results
+    
+    def delete_face(self, face_id: int) -> bool:
+        """Delete a face and its embedding. Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Delete feedback for this face
+            cursor.execute("DELETE FROM feedback WHERE face_id = ?", (face_id,))
+            # Delete embedding
+            cursor.execute("DELETE FROM embeddings WHERE face_id = ?", (face_id,))
+            # Delete face
+            cursor.execute("DELETE FROM faces WHERE id = ?", (face_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def delete_person(self, person_id: int) -> bool:
+        """Delete a person and unassign all faces. Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Unassign faces from this person
+            cursor.execute("UPDATE faces SET person_id = NULL WHERE person_id = ?", (person_id,))
+            # Delete person
+            cursor.execute("DELETE FROM people WHERE id = ?", (person_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def get_person(self, person_id: int) -> Optional[Dict]:
+        """Get person by ID."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM people WHERE id = ?", (person_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    def update_faces_cluster(self, face_ids: List[int], cluster_id: int) -> None:
+        """Batch update cluster for multiple faces."""
+        if not face_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(face_ids))
+        cursor.execute(f"UPDATE faces SET cluster_id = ? WHERE id IN ({placeholders})", [cluster_id] + face_ids)
+        conn.commit()
+        conn.close()
+    
+    def update_faces_person(self, face_ids: List[int], person_id: Optional[int]) -> None:
+        """Batch update person for multiple faces."""
+        if not face_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(face_ids))
+        cursor.execute(f"UPDATE faces SET person_id = ? WHERE id IN ({placeholders})", [person_id] + face_ids)
+        conn.commit()
+        conn.close()
+    
+    def get_face(self, face_id: int) -> Optional[Dict]:
+        """Get face by ID."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM faces WHERE id = ?", (face_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    def get_faces_without_clusters(self) -> List[Dict]:
+        """Get all faces that haven't been clustered yet."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM faces WHERE cluster_id IS NULL")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    
+    def count_faces_without_clusters(self) -> int:
+        """Count faces that haven't been clustered yet."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count

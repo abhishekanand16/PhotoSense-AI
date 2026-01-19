@@ -43,6 +43,7 @@ export interface Person {
   cluster_id?: number;
   name?: string;
   face_count: number;
+  thumbnail_url?: string;
 }
 
 export interface ScanJob {
@@ -85,7 +86,11 @@ export const photosApi = {
 export const peopleApi = {
   list: async (): Promise<Person[]> => {
     const response = await api.get<Person[]>("/people");
-    return response.data;
+    // Add thumbnail URLs to each person
+    return response.data.map(person => ({
+      ...person,
+      thumbnail_url: `${API_BASE_URL}/people/${person.id}/thumbnail?size=200`
+    }));
   },
   getPhotos: async (personId: number): Promise<Photo[]> => {
     const response = await api.get<Photo[]>(`/people/${personId}/photos`);
