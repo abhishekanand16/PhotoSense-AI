@@ -21,16 +21,18 @@ async def list_people():
     store = SQLiteStore()
     try:
         people = store.get_all_people()
-        # Add face counts
+        # Add photo counts (unique photos, not face count)
         result = []
         for person in people:
             faces = store.get_faces_for_person(person["id"])
+            # Count unique photos, not faces (a person can appear multiple times in one photo)
+            unique_photo_ids = {face["photo_id"] for face in faces}
             result.append(
                 PersonResponse(
                     id=person["id"],
                     cluster_id=person.get("cluster_id"),
                     name=person.get("name"),
-                    face_count=len(faces),
+                    face_count=len(unique_photo_ids),  # This is actually photo count now
                 )
             )
         return result
@@ -48,11 +50,13 @@ async def update_person(person_id: int, request: UpdatePersonRequest):
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
         faces = store.get_faces_for_person(person_id)
+        # Count unique photos, not faces
+        unique_photo_ids = {face["photo_id"] for face in faces}
         return PersonResponse(
             id=person["id"],
             cluster_id=person.get("cluster_id"),
             name=person.get("name"),
-            face_count=len(faces),
+            face_count=len(unique_photo_ids),
         )
     except HTTPException:
         raise

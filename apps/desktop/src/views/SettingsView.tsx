@@ -256,6 +256,16 @@ const SettingsView: React.FC = () => {
                 )}
               </div>
 
+              {stats && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-light-bg dark:bg-dark-bg/50 rounded-xl border border-light-border dark:border-dark-border">
+                  <BarChart3 size={14} className="text-brand-primary" />
+                  <span className="text-xs font-medium text-light-text-secondary dark:text-dark-text-secondary">
+                    Photos Processed:
+                  </span>
+                  <span className="text-sm font-bold text-brand-primary">{stats.total_photos}</span>
+                </div>
+              )}
+
               <div className="pt-4 border-t border-light-border dark:border-dark-border">
                 <div className="flex items-center justify-between">
                   <div>

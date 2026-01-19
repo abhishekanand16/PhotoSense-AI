@@ -12,15 +12,16 @@ router = APIRouter(prefix="/objects", tags=["objects"])
 
 @router.get("/categories")
 async def list_categories():
-    """Get all object categories (excluding 'person' which is handled by People tab)."""
+    """Get all object categories (excluding 'person' and 'other')."""
     store = SQLiteStore()
     try:
-        # Get unique categories, excluding 'person' since faces are tracked separately
+        # Get unique categories, excluding 'person' (handled in People tab) and 'other' (too generic)
         photos = store.get_all_photos()
         categories = set()
+        excluded = {"person", "other"}
         for photo in photos:
             objects = store.get_objects_for_photo(photo["id"])
-            categories.update(obj["category"] for obj in objects if obj["category"] != "person")
+            categories.update(obj["category"] for obj in objects if obj["category"] not in excluded)
         return sorted(list(categories))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -40,6 +41,10 @@ async def get_objects_by_category(category: str):
 @router.get("/category/{category}/photos", response_model=List[PhotoResponse])
 async def get_photos_by_category(category: str):
     """Get all photos containing objects of a specific category."""
+    # Block access to excluded categories
+    if category in {"person", "other"}:
+        return []
+    
     store = SQLiteStore()
     try:
         objects = store.get_objects_by_category(category)

@@ -95,8 +95,10 @@ class ObjectDetector:
                 class_id = int(box.cls[0].cpu().numpy())
                 class_name = self.model.names[class_id]
 
-                # Map to simplified category
-                category = self.CATEGORY_MAP.get(class_name, "other")
+                # Map to simplified category - skip if not in our category map
+                category = self.CATEGORY_MAP.get(class_name)
+                if category is None:
+                    continue  # Skip objects that don't match known categories
 
                 width = int(x2 - x1)
                 height = int(y2 - y1)
