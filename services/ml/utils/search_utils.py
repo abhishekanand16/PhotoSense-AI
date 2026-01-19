@@ -82,8 +82,8 @@ class SearchQueryProcessor:
         'vehicle': ['vehicle', 'street'],
         'bicycle': ['vehicle', 'outdoor'],
         'bike': ['vehicle', 'outdoor'],
-        'person': ['person'],
-        'people': ['person'],
+        # 'person': ['person'],  # EXCLUDED - use People tab for face search
+        # 'people': ['person'],  # EXCLUDED - use People tab for face search
         'animal': ['animal', 'nature'],
         'animals': ['animal', 'nature'],
         'dog': ['animal'],
@@ -114,9 +114,9 @@ class SearchQueryProcessor:
         'motorcycle': ['motorcycle', 'vehicle'],
         'dog': ['dog', 'animal'],
         'cat': ['cat', 'animal'],
-        'person': ['person'],
-        'people': ['person'],
-        'human': ['person'],
+        # 'person': ['person'],  # EXCLUDED - use People tab for face search
+        # 'people': ['person'],  # EXCLUDED - use People tab for face search
+        # 'human': ['person'],  # EXCLUDED - use People tab for face search
         'chair': ['chair', 'furniture'],
         'table': ['dining table', 'furniture'],
         'laptop': ['laptop', 'electronics'],

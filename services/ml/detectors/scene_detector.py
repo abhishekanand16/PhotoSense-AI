@@ -60,21 +60,25 @@ class SceneDetector:
         ])
 
     def _load_model(self) -> None:
-        """Lazy load Places365 model."""
+        """Lazy load Places365 model with offline fallback."""
         if self.model is not None:
             return
             
         try:
-            # Try loading from torch hub
+            # Try loading from torch hub with local cache
+            import os
+            os.environ['TORCH_HOME'] = os.path.expanduser('~/.cache/torch')
+            
             self.model = torch.hub.load(
                 'CSAILVision/places365',
                 'resnet50',
-                pretrained=True
+                pretrained=True,
+                skip_validation=True  # Skip validation to work offline if cached
             )
             self.model.eval()
             self.model.to(self.device)
             
-            # Load scene labels
+            # Load scene labels with offline fallback
             import urllib.request
             label_url = 'https://raw.githubusercontent.com/csailvision/places365/master/categories_places365.txt'
             try:
@@ -82,15 +86,23 @@ class SceneDetector:
                     self.labels = [line.decode('utf-8').strip().split(' ')[0][3:] 
                                  for line in response.readlines()]
             except Exception as e:
-                logging.warning(f"Could not load Places365 labels: {e}")
-                # Fallback: create minimal labels
-                self.labels = [f"scene_{i}" for i in range(365)]
+                logging.warning(f"Could not load Places365 labels from URL: {e}, using offline fallback")
+                # Try loading from local file if it exists
+                local_labels_path = os.path.join(os.path.dirname(__file__), 'places365_labels.txt')
+                if os.path.exists(local_labels_path):
+                    with open(local_labels_path, 'r') as f:
+                        self.labels = [line.strip().split(' ')[0][3:] for line in f.readlines()]
+                else:
+                    # Ultimate fallback: create minimal labels
+                    self.labels = [f"scene_{i}" for i in range(365)]
                 
             logging.info("Places365 scene detector loaded successfully")
             
         except Exception as e:
             logging.error(f"Failed to load Places365 model: {e}")
-            raise
+            # Set model to None so detection gracefully fails
+            self.model = None
+            self.labels = []
 
     def detect(self, image_path: str, top_k: int = 5) -> List[Tuple[str, float]]:
         """
@@ -104,6 +116,11 @@ class SceneDetector:
             List of (scene_label, confidence) tuples
         """
         self._load_model()
+        
+        # If model failed to load, return empty list gracefully
+        if self.model is None or not self.labels:
+            logging.warning(f"Scene detector not available, skipping detection for {image_path}")
+            return []
         
         try:
             # Load and preprocess image

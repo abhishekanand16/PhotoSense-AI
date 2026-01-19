@@ -13,8 +13,9 @@ class ObjectDetector:
 
     # Enhanced category mapping - keep original YOLO classes for better searchability
     # Map to both simplified category AND keep original class name
+    # NOTE: "person" is excluded - we have dedicated face detection for people
     CATEGORY_MAP = {
-        "person": "person",
+        # "person": "person",  # EXCLUDED - use face detection instead
         "bicycle": "vehicle",
         "car": "vehicle",
         "motorcycle": "vehicle",
