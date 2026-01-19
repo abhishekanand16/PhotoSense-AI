@@ -457,7 +457,8 @@ class SQLiteStore:
         stats["total_photos"] = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM faces")
         stats["total_faces"] = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM objects")
+        # Exclude 'person' category from objects count (handled separately in People tab)
+        cursor.execute("SELECT COUNT(*) FROM objects WHERE category != 'person'")
         stats["total_objects"] = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM people")
         stats["total_people"] = cursor.fetchone()[0]
