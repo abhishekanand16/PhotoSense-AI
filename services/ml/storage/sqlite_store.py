@@ -18,7 +18,7 @@ class SQLiteStore:
 
     def _init_schema(self) -> None:
         """Create database tables if they don't exist."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
 
         # Photos table
@@ -133,7 +133,7 @@ class SQLiteStore:
         file_size: Optional[int] = None,
     ) -> Optional[int]:
         """Add a photo to the database. Returns photo_id or None if duplicate."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         try:
             cursor.execute(
@@ -154,7 +154,7 @@ class SQLiteStore:
 
     def get_photo(self, photo_id: int) -> Optional[Dict]:
         """Get photo by ID."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
@@ -164,7 +164,7 @@ class SQLiteStore:
 
     def get_photo_by_path(self, file_path: str) -> Optional[Dict]:
         """Get photo by file path."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM photos WHERE file_path = ?", (file_path,))
@@ -182,7 +182,7 @@ class SQLiteStore:
         file_size: Optional[int] = None,
     ) -> None:
         """Update photo metadata. Only updates fields that are not None."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         
         updates = []
@@ -214,7 +214,7 @@ class SQLiteStore:
 
     def get_all_photos(self) -> List[Dict]:
         """Get all photos."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM photos ORDER BY date_taken DESC, created_at DESC")
@@ -235,12 +235,12 @@ class SQLiteStore:
         person_id: Optional[int] = None,
     ) -> int:
         """Add a detected face. Returns face_id."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)  # Increased timeout to avoid locks
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, embedding_id, cluster_id, person_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, embedding_id, cluster_id, person_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, embedding_id, cluster_id, person_id),
         )
@@ -251,7 +251,7 @@ class SQLiteStore:
 
     def get_faces_for_photo(self, photo_id: int) -> List[Dict]:
         """Get all faces for a photo."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM faces WHERE photo_id = ?", (photo_id,))
@@ -261,7 +261,7 @@ class SQLiteStore:
 
     def update_face_embedding(self, face_id: int, embedding_id: int) -> None:
         """Update face with embedding ID."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute("UPDATE faces SET embedding_id = ? WHERE id = ?", (embedding_id, face_id))
         conn.commit()
@@ -269,7 +269,7 @@ class SQLiteStore:
 
     def update_face_cluster(self, face_id: int, cluster_id: int) -> None:
         """Update face cluster assignment."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute("UPDATE faces SET cluster_id = ? WHERE id = ?", (cluster_id, face_id))
         conn.commit()
@@ -277,7 +277,7 @@ class SQLiteStore:
 
     def update_face_person(self, face_id: int, person_id: Optional[int]) -> None:
         """Update face person assignment."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute("UPDATE faces SET person_id = ? WHERE id = ?", (person_id, face_id))
         conn.commit()
@@ -285,7 +285,7 @@ class SQLiteStore:
 
     def get_faces_for_person(self, person_id: int) -> List[Dict]:
         """Get all faces for a person."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM faces WHERE person_id = ?", (person_id,))
@@ -304,7 +304,7 @@ class SQLiteStore:
         confidence: float,
     ) -> int:
         """Add a detected object. Returns object_id."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -320,7 +320,7 @@ class SQLiteStore:
 
     def get_objects_for_photo(self, photo_id: int) -> List[Dict]:
         """Get all objects for a photo."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM objects WHERE photo_id = ?", (photo_id,))
@@ -330,7 +330,7 @@ class SQLiteStore:
 
     def get_objects_by_category(self, category: str) -> List[Dict]:
         """Get all objects of a category."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM objects WHERE category = ?", (category,))
@@ -340,7 +340,7 @@ class SQLiteStore:
 
     def create_person(self, cluster_id: Optional[int] = None, name: Optional[str] = None) -> int:
         """Create a person entry. Returns person_id."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO people (cluster_id, name) VALUES (?, ?)",
@@ -353,7 +353,7 @@ class SQLiteStore:
 
     def get_all_people(self) -> List[Dict]:
         """Get all people."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM people ORDER BY name, id")
@@ -363,7 +363,7 @@ class SQLiteStore:
 
     def update_person_name(self, person_id: int, name: str) -> None:
         """Update person name."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE people SET name = ?, updated_at = ? WHERE id = ?",
@@ -374,7 +374,7 @@ class SQLiteStore:
 
     def merge_people(self, source_person_id: int, target_person_id: int) -> None:
         """Merge source person into target person."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute("UPDATE faces SET person_id = ? WHERE person_id = ?", (target_person_id, source_person_id))
         cursor.execute("DELETE FROM people WHERE id = ?", (source_person_id,))
@@ -383,7 +383,7 @@ class SQLiteStore:
 
     def add_feedback(self, face_id: int, action: str, data: Optional[str] = None) -> int:
         """Add user feedback. Returns feedback_id."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO feedback (face_id, action, data) VALUES (?, ?, ?)",
@@ -396,7 +396,7 @@ class SQLiteStore:
 
     def delete_photo(self, photo_id: int) -> bool:
         """Delete a photo and all related data (faces, objects, feedback). Returns True if deleted."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         try:
             # First, get all face IDs for this photo to delete related feedback
@@ -428,7 +428,7 @@ class SQLiteStore:
 
     def get_statistics(self) -> Dict:
         """Get database statistics."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         stats = {}
         cursor.execute("SELECT COUNT(*) FROM photos")
