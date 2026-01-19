@@ -4,7 +4,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException
 
-from services.api.models import MergePeopleRequest, PersonResponse, UpdatePersonRequest
+from services.api.models import MergePeopleRequest, PersonResponse, PhotoResponse, UpdatePersonRequest
 from services.ml.storage.sqlite_store import SQLiteStore
 
 router = APIRouter(prefix="/people", tags=["people"])
@@ -51,6 +51,33 @@ async def update_person(person_id: int, request: UpdatePersonRequest):
         )
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{person_id}/photos", response_model=List[PhotoResponse])
+async def get_photos_for_person(person_id: int):
+    """Get all photos for a specific person."""
+    store = SQLiteStore()
+    try:
+        faces = store.get_faces_for_person(person_id)
+        photo_ids = {face["photo_id"] for face in faces}
+        photos = []
+        for photo_id in photo_ids:
+            photo = store.get_photo(photo_id)
+            if photo:
+                photo_dict = {
+                    "id": photo["id"],
+                    "file_path": photo["file_path"],
+                    "date_taken": photo.get("date_taken"),
+                    "camera_model": photo.get("camera_model"),
+                    "width": photo.get("width"),
+                    "height": photo.get("height"),
+                    "file_size": photo.get("file_size"),
+                    "created_at": str(photo.get("created_at", "")) if photo.get("created_at") else "",
+                }
+                photos.append(photo_dict)
+        return photos
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

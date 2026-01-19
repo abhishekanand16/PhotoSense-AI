@@ -28,12 +28,15 @@ class FaceDetector:
         """Lazy load the InsightFace model."""
         if self.app is None:
             # Load only detection module (faster, no recognition/attributes)
+            # Model name is specified in FaceAnalysis constructor
             self.app = FaceAnalysis(
+                name=self.model_name,
                 allowed_modules=['detection'],
                 providers=['CPUExecutionProvider']  # Use CPU (ONNX runtime)
             )
             # Prepare the model (downloads if needed)
-            self.app.prepare(ctx_id=-1, det_size=(640, 640), model_name=self.model_name)
+            # ctx_id=-1 means CPU, det_size is detection resolution
+            self.app.prepare(ctx_id=-1, det_size=(640, 640))
 
     def detect(self, image_path: str) -> List[Tuple[int, int, int, int, float]]:
         """

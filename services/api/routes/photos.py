@@ -1,11 +1,14 @@
 """Photo-related endpoints."""
 
+import logging
+from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from services.api.models import PhotoResponse
 from services.ml.storage.sqlite_store import SQLiteStore
+from services.ml.utils import extract_exif_metadata
 
 router = APIRouter(prefix="/photos", tags=["photos"])
 
@@ -54,3 +57,162 @@ async def get_photo(photo_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{photo_id}")
+async def delete_photo(photo_id: int):
+    """Delete a specific photo and all related data, including the file from disk."""
+    store = SQLiteStore()
+    try:
+        # Check if photo exists
+        photo = store.get_photo(photo_id)
+        if not photo:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        
+        file_path = photo.get("file_path")
+        file_deleted = False
+        
+        # Delete the file from disk if it exists
+        if file_path:
+            try:
+                file_path_obj = Path(file_path)
+                if file_path_obj.exists() and file_path_obj.is_file():
+                    file_path_obj.unlink()
+                    file_deleted = True
+                    logging.info(f"Deleted file: {file_path}")
+                else:
+                    logging.warning(f"File not found or not a file: {file_path}")
+            except Exception as e:
+                logging.error(f"Failed to delete file {file_path}: {str(e)}")
+                # Continue with database deletion even if file deletion fails
+        
+        # Delete the photo and all related data from database
+        deleted = store.delete_photo(photo_id)
+        if not deleted:
+            raise HTTPException(status_code=500, detail="Failed to delete photo from database")
+        
+        message = f"Photo {photo_id} deleted successfully"
+        if file_path and not file_deleted:
+            message += " (file was not found on disk)"
+        
+        return {"status": "success", "message": message}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/delete", response_model=dict)
+async def delete_photos(photo_ids: List[int]):
+    """Delete multiple photos by their IDs, including files from disk."""
+    store = SQLiteStore()
+    try:
+        deleted_count = 0
+        files_deleted = 0
+        not_found = []
+        errors = []
+        
+        for photo_id in photo_ids:
+            try:
+                photo = store.get_photo(photo_id)
+                if not photo:
+                    not_found.append(photo_id)
+                    continue
+                
+                file_path = photo.get("file_path")
+                file_deleted = False
+                
+                # Delete the file from disk if it exists
+                if file_path:
+                    try:
+                        file_path_obj = Path(file_path)
+                        if file_path_obj.exists() and file_path_obj.is_file():
+                            file_path_obj.unlink()
+                            file_deleted = True
+                            files_deleted += 1
+                            logging.info(f"Deleted file: {file_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete file {file_path}: {str(e)}")
+                        # Continue with database deletion even if file deletion fails
+                
+                # Delete the photo and all related data from database
+                deleted = store.delete_photo(photo_id)
+                if deleted:
+                    deleted_count += 1
+                else:
+                    errors.append(photo_id)
+            except Exception as e:
+                logging.error(f"Failed to delete photo {photo_id}: {str(e)}")
+                errors.append(photo_id)
+        
+        message = f"Deleted {deleted_count} photo(s) from database"
+        if files_deleted < deleted_count:
+            message += f" ({files_deleted} files deleted from disk)"
+        elif files_deleted == deleted_count:
+            message += f" ({files_deleted} files deleted from disk)"
+        
+        return {
+            "status": "completed",
+            "deleted": deleted_count,
+            "files_deleted": files_deleted,
+            "not_found": not_found,
+            "errors": errors,
+            "message": message
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/update-metadata", response_model=dict)
+async def update_metadata_for_all_photos(background_tasks: BackgroundTasks):
+    """Update metadata for all photos that are missing it."""
+    store = SQLiteStore()
+    
+    async def update_metadata_async():
+        """Background task to update metadata for all photos."""
+        photos = store.get_all_photos()
+        updated = 0
+        errors = 0
+        
+        for photo in photos:
+            try:
+                file_path = photo["file_path"]
+                # Check if file exists
+                if not Path(file_path).exists():
+                    logging.warning(f"Photo file not found: {file_path}")
+                    continue
+                
+                # Check if metadata is missing
+                if not photo.get("date_taken") or not photo.get("width"):
+                    # Extract metadata
+                    metadata = extract_exif_metadata(file_path)
+                    
+                    # Update if we got metadata
+                    if metadata.get("date_taken") or metadata.get("width"):
+                        update_data = {}
+                        if not photo.get("date_taken") and metadata.get("date_taken"):
+                            update_data["date_taken"] = metadata.get("date_taken")
+                        if not photo.get("camera_model") and metadata.get("camera_model"):
+                            update_data["camera_model"] = metadata.get("camera_model")
+                        if not photo.get("width") and metadata.get("width"):
+                            update_data["width"] = metadata.get("width")
+                        if not photo.get("height") and metadata.get("height"):
+                            update_data["height"] = metadata.get("height")
+                        if not photo.get("file_size") and metadata.get("file_size"):
+                            update_data["file_size"] = metadata.get("file_size")
+                        
+                        if update_data:
+                            store.update_photo_metadata(photo_id=photo["id"], **update_data)
+                            updated += 1
+            except Exception as e:
+                logging.error(f"Failed to update metadata for photo {photo.get('id')}: {str(e)}")
+                errors += 1
+        
+        logging.info(f"Metadata update completed: {updated} photos updated, {errors} errors")
+    
+    background_tasks.add_task(update_metadata_async)
+    
+    return {
+        "status": "started",
+        "message": "Metadata update started in background"
+    }

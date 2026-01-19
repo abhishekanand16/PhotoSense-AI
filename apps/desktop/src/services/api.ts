@@ -9,7 +9,23 @@ const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+  timeout: 30000, // 30 second timeout
 });
+
+// Add response interceptor for better error handling
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
+      throw new Error('Cannot connect to backend API. Make sure the server is running at http://localhost:8000');
+    }
+    if (error.response) {
+      // Server responded with error status
+      throw new Error(error.response.data?.detail || error.response.data?.message || `Server error: ${error.response.status}`);
+    }
+    throw error;
+  }
+);
 
 export interface Photo {
   id: number;
@@ -40,6 +56,7 @@ export interface JobStatus {
   status: string;
   progress: number;
   message?: string;
+  phase?: "import" | "scanning" | "complete";
 }
 
 export const photosApi = {
@@ -51,11 +68,27 @@ export const photosApi = {
     const response = await api.get<Photo>(`/photos/${id}`);
     return response.data;
   },
+  updateMetadata: async (): Promise<{ status: string; message: string }> => {
+    const response = await api.post<{ status: string; message: string }>("/photos/update-metadata");
+    return response.data;
+  },
+  delete: async (id: number): Promise<{ status: string; message: string }> => {
+    const response = await api.delete<{ status: string; message: string }>(`/photos/${id}`);
+    return response.data;
+  },
+  deleteMultiple: async (ids: number[]): Promise<{ status: string; deleted: number; not_found: number[]; errors: number[]; message: string }> => {
+    const response = await api.post<{ status: string; deleted: number; not_found: number[]; errors: number[]; message: string }>("/photos/delete", ids);
+    return response.data;
+  },
 };
 
 export const peopleApi = {
   list: async (): Promise<Person[]> => {
     const response = await api.get<Person[]>("/people");
+    return response.data;
+  },
+  getPhotos: async (personId: number): Promise<Photo[]> => {
+    const response = await api.get<Photo[]>(`/people/${personId}/photos`);
     return response.data;
   },
   updateName: async (personId: number, name: string): Promise<Person> => {
@@ -76,6 +109,10 @@ export const scanApi = {
     const response = await api.get<JobStatus>(`/scan/status/${jobId}`);
     return response.data;
   },
+  scanFaces: async (): Promise<ScanJob> => {
+    const response = await api.post<ScanJob>("/scan/faces");
+    return response.data;
+  },
 };
 
 export const searchApi = {
@@ -89,9 +126,31 @@ export const searchApi = {
   },
 };
 
+export const objectsApi = {
+  getCategories: async (): Promise<string[]> => {
+    const response = await api.get<string[]>("/objects/categories");
+    return response.data;
+  },
+  getPhotosByCategory: async (category: string): Promise<Photo[]> => {
+    const response = await api.get<Photo[]>(`/objects/category/${category}/photos`);
+    return response.data;
+  },
+};
+
 export const statsApi = {
   get: async () => {
     const response = await api.get("/stats");
     return response.data;
+  },
+};
+
+export const healthApi = {
+  check: async (): Promise<boolean> => {
+    try {
+      const response = await api.get("/health");
+      return response.data?.status === "healthy";
+    } catch {
+      return false;
+    }
   },
 };

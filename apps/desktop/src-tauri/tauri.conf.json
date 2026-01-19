@@ -3,7 +3,6 @@
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
     "devPath": "http://localhost:1420",
-    "distPath": "../dist",
     "withGlobalTauri": false
   },
   "package": {
@@ -25,7 +24,21 @@
         "all": false,
         "readFile": true,
         "readDir": true,
-        "scope": ["$APPDATA/**", "$DOCUMENT/**", "$PICTURE/**"]
+        "scope": [
+          "$APPDATA/**",
+          "$DOCUMENT/**",
+          "$PICTURE/**",
+          "**"
+        ]
+      },
+      "protocol": {
+        "asset": true,
+        "assetScope": [
+          "$APPDATA/**",
+          "$DOCUMENT/**",
+          "$PICTURE/**",
+          "**"
+        ]
       }
     },
     "bundle": {
