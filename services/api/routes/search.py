@@ -82,13 +82,13 @@ async def search_photos(request: SearchRequest):
                 try:
                     # Use CLIP for complex queries or when no matches found
                     # Apply similarity threshold to filter out irrelevant results
-                    # 
+                    #
                     # Threshold selection:
                     # - If we have scene/object matches, use higher threshold (0.25)
                     #   to only add highly relevant semantic matches
                     # - If no matches found, use lower threshold (0.20)
                     #   to be more inclusive but still filter noise
-                    # 
+                    #
                     # These thresholds were tuned to balance precision vs recall:
                     # - 0.30+ = strong semantic match
                     # - 0.20-0.30 = moderate match (potentially relevant)
