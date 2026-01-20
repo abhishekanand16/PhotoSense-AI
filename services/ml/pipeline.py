@@ -719,11 +719,61 @@ class MLPipeline:
             "total_faces": len(embeddings_data)
         }
 
-    async def search_similar_images(self, query_text: str, k: int = 10) -> List[int]:
-        """Search for similar images using text query."""
+    async def search_similar_images(
+        self, 
+        query_text: str, 
+        k: int = 10,
+        min_similarity: float = 0.20,
+        return_scores: bool = False
+    ) -> List[int]:
+        """
+        Search for similar images using text query with similarity threshold.
+        
+        Args:
+            query_text: Natural language query (e.g., "beach sunset", "dog playing")
+            k: Maximum number of results to return
+            min_similarity: Minimum cosine similarity threshold (0-1). 
+                           Default 0.20 filters out weak matches.
+                           - 0.30+ = strong match (very relevant)
+                           - 0.20-0.30 = moderate match (somewhat relevant)
+                           - <0.20 = weak match (likely irrelevant noise)
+            return_scores: If True, return list of (photo_id, similarity) tuples
+            
+        Returns:
+            List of photo IDs (or tuples if return_scores=True) above threshold,
+            sorted by similarity (highest first)
+        """
         query_embedding = self.image_embedder.embed_text(query_text)
-        distances, photo_ids = self.index.search("image", query_embedding, k=k)
-        return [int(pid) for pid in photo_ids if pid >= 0]
+        
+        # Get more candidates than k to filter by threshold
+        # Request 3x to have room after filtering
+        distances, photo_ids = self.index.search("image", query_embedding, k=k * 3)
+        
+        # For cosine similarity with IndexFlatIP (inner product on normalized vectors):
+        # - distance IS the similarity score (higher = more similar)
+        # - Range is typically 0 to 1 for normalized vectors
+        # 
+        # Filter results by similarity threshold
+        filtered_results = []
+        for dist, pid in zip(distances, photo_ids):
+            if pid < 0:
+                continue
+            
+            # The FAISS index uses IndexFlatIP with normalized vectors,
+            # so distance = cosine similarity (higher = more similar)
+            similarity = float(dist)
+            
+            if similarity >= min_similarity:
+                filtered_results.append((int(pid), similarity))
+        
+        # Sort by similarity (highest first) and limit to k
+        filtered_results.sort(key=lambda x: x[1], reverse=True)
+        filtered_results = filtered_results[:k]
+        
+        if return_scores:
+            return filtered_results
+        else:
+            return [pid for pid, _ in filtered_results]
 
     async def search_similar_faces(self, face_id: int, k: int = 10) -> List[Dict]:
         """
