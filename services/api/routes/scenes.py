@@ -27,9 +27,15 @@ async def list_scene_summary(
     min_photo_count: int = 1,
     min_avg_confidence: float = 0.0,
 ):
-    """Get scene labels with photo counts and average confidence."""
+    """Get scene labels with photo counts and average confidence. Auto-cleans orphaned scenes."""
     store = SQLiteStore()
     try:
+        # Clean up orphaned scenes (where photo was deleted)
+        orphaned_count = store.cleanup_orphaned_scenes()
+        if orphaned_count > 0:
+            import logging
+            logging.info(f"Cleaned up {orphaned_count} orphaned scenes")
+        
         summaries = store.get_scene_label_stats(prefix=prefix)
         filtered = [
             summary

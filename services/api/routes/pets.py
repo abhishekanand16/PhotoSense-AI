@@ -24,9 +24,15 @@ router = APIRouter(prefix="/pets", tags=["pets"])
 
 @router.get("", response_model=List[PetResponse])
 async def list_pets():
-    """Get all pets."""
+    """Get all pets. Automatically cleans up orphaned pets with zero detections."""
     store = SQLiteStore()
     try:
+        # Clean up orphaned pets (with 0 detections) before listing
+        orphaned = store.cleanup_orphaned_pets()
+        if orphaned:
+            import logging
+            logging.info(f"Cleaned up {len(orphaned)} orphaned pets with no detections: {orphaned}")
+        
         pets = store.get_all_pets()
         result = []
         for pet in pets:

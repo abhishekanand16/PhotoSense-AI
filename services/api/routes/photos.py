@@ -62,6 +62,8 @@ async def get_photo(photo_id: int):
 @router.delete("/{photo_id}")
 async def delete_photo(photo_id: int):
     """Delete a specific photo and all related data, including the file from disk."""
+    from services.ml.storage.faiss_index import FAISSIndex
+    
     store = SQLiteStore()
     try:
         # Check if photo exists
@@ -72,7 +74,57 @@ async def delete_photo(photo_id: int):
         file_path = photo.get("file_path")
         file_deleted = False
         
-        # Delete the file from disk if it exists
+        # TRANSACTIONAL SAFETY: Delete from DB first, then FAISS
+        # Step 1: Delete from database and get IDs for FAISS cleanup
+        deletion_result = store.delete_photo(photo_id)
+        if not deletion_result["deleted"]:
+            raise HTTPException(status_code=500, detail="Failed to delete photo from database")
+        
+        # Step 2: Remove ALL embeddings from FAISS indices
+        # This happens AFTER successful DB deletion
+        try:
+            faiss_index = FAISSIndex()
+            
+            # Remove face embeddings
+            if deletion_result["face_ids"]:
+                faiss_index.load_index("face")
+                faiss_index.remove_vectors("face", deletion_result["face_ids"])
+                faiss_index.save_index("face")
+                logging.info(f"Removed {len(deletion_result['face_ids'])} face embeddings from FAISS")
+            
+            # Remove pet embeddings
+            if deletion_result["pet_detection_ids"]:
+                faiss_index.load_index("pet")
+                faiss_index.remove_vectors("pet", deletion_result["pet_detection_ids"])
+                faiss_index.save_index("pet")
+                logging.info(f"Removed {len(deletion_result['pet_detection_ids'])} pet embeddings from FAISS")
+            
+            # Remove image embedding (for semantic search)
+            try:
+                faiss_index.load_index("image")
+                faiss_index.remove_vectors("image", [photo_id])
+                faiss_index.save_index("image")
+                logging.info(f"Removed image embedding for photo {photo_id} from FAISS")
+            except Exception as e:
+                logging.warning(f"Failed to remove image embedding: {str(e)}")
+        except Exception as e:
+            logging.error(f"Failed to remove embeddings from FAISS: {str(e)}")
+            # Continue - FAISS can be rebuilt later if needed
+        
+        # Step 3: Clean up orphaned people and pets
+        try:
+            orphaned_people = store.cleanup_orphaned_people()
+            if orphaned_people:
+                logging.info(f"Cleaned up {len(orphaned_people)} orphaned people: {orphaned_people}")
+            
+            orphaned_pets = store.cleanup_orphaned_pets()
+            if orphaned_pets:
+                logging.info(f"Cleaned up {len(orphaned_pets)} orphaned pets: {orphaned_pets}")
+        except Exception as e:
+            logging.error(f"Failed to clean up orphaned records: {str(e)}")
+            # Continue - cleanup can be done manually if needed
+        
+        # Step 4: Delete the file from disk (after DB operations)
         if file_path:
             try:
                 file_path_obj = Path(file_path)
@@ -84,18 +136,22 @@ async def delete_photo(photo_id: int):
                     logging.warning(f"File not found or not a file: {file_path}")
             except Exception as e:
                 logging.error(f"Failed to delete file {file_path}: {str(e)}")
-                # Continue with database deletion even if file deletion fails
-        
-        # Delete the photo and all related data from database
-        deleted = store.delete_photo(photo_id)
-        if not deleted:
-            raise HTTPException(status_code=500, detail="Failed to delete photo from database")
+                # File deletion failure is not critical
         
         message = f"Photo {photo_id} deleted successfully"
+        if deletion_result["face_ids"]:
+            message += f" ({len(deletion_result['face_ids'])} faces removed)"
+        if deletion_result["pet_detection_ids"]:
+            message += f" ({len(deletion_result['pet_detection_ids'])} pet detections removed)"
         if file_path and not file_deleted:
             message += " (file was not found on disk)"
         
-        return {"status": "success", "message": message}
+        return {
+            "status": "success", 
+            "message": message,
+            "faces_deleted": len(deletion_result["face_ids"]),
+            "pets_deleted": len(deletion_result["pet_detection_ids"])
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -105,12 +161,18 @@ async def delete_photo(photo_id: int):
 @router.post("/delete", response_model=dict)
 async def delete_photos(photo_ids: List[int]):
     """Delete multiple photos by their IDs, including files from disk."""
+    from services.ml.storage.faiss_index import FAISSIndex
+    
     store = SQLiteStore()
     try:
         deleted_count = 0
         files_deleted = 0
         not_found = []
         errors = []
+        
+        # Collect all face and pet IDs across all photos for batch FAISS cleanup
+        all_face_ids = []
+        all_pet_detection_ids = []
         
         for photo_id in photo_ids:
             try:
@@ -119,33 +181,76 @@ async def delete_photos(photo_ids: List[int]):
                     not_found.append(photo_id)
                     continue
                 
-                file_path = photo.get("file_path")
-                file_deleted = False
-                
-                # Delete the file from disk if it exists
-                if file_path:
-                    try:
-                        file_path_obj = Path(file_path)
-                        if file_path_obj.exists() and file_path_obj.is_file():
-                            file_path_obj.unlink()
-                            file_deleted = True
-                            files_deleted += 1
-                            logging.info(f"Deleted file: {file_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to delete file {file_path}: {str(e)}")
-                        # Continue with database deletion even if file deletion fails
-                
-                # Delete the photo and all related data from database
-                deleted = store.delete_photo(photo_id)
-                if deleted:
+                # TRANSACTIONAL SAFETY: Delete from DB first, collect IDs for FAISS cleanup
+                deletion_result = store.delete_photo(photo_id)
+                if deletion_result["deleted"]:
                     deleted_count += 1
+                    all_face_ids.extend(deletion_result["face_ids"])
+                    all_pet_detection_ids.extend(deletion_result["pet_detection_ids"])
+                    
+                    # Delete file from disk
+                    file_path = photo.get("file_path")
+                    if file_path:
+                        try:
+                            file_path_obj = Path(file_path)
+                            if file_path_obj.exists() and file_path_obj.is_file():
+                                file_path_obj.unlink()
+                                files_deleted += 1
+                                logging.info(f"Deleted file: {file_path}")
+                        except Exception as e:
+                            logging.error(f"Failed to delete file {file_path}: {str(e)}")
                 else:
                     errors.append(photo_id)
             except Exception as e:
                 logging.error(f"Failed to delete photo {photo_id}: {str(e)}")
                 errors.append(photo_id)
         
+        # Batch remove ALL embeddings from FAISS indices (after all DB deletions)
+        try:
+            faiss_index = FAISSIndex()
+            
+            if all_face_ids:
+                faiss_index.load_index("face")
+                faiss_index.remove_vectors("face", all_face_ids)
+                faiss_index.save_index("face")
+                logging.info(f"Removed {len(all_face_ids)} face embeddings from FAISS")
+            
+            if all_pet_detection_ids:
+                faiss_index.load_index("pet")
+                faiss_index.remove_vectors("pet", all_pet_detection_ids)
+                faiss_index.save_index("pet")
+                logging.info(f"Removed {len(all_pet_detection_ids)} pet embeddings from FAISS")
+            
+            # Remove image embeddings (for semantic search)
+            if photo_ids:
+                try:
+                    faiss_index.load_index("image")
+                    faiss_index.remove_vectors("image", list(photo_ids))
+                    faiss_index.save_index("image")
+                    logging.info(f"Removed {len(photo_ids)} image embeddings from FAISS")
+                except Exception as e:
+                    logging.warning(f"Failed to remove image embeddings: {str(e)}")
+        except Exception as e:
+            logging.error(f"Failed to remove embeddings from FAISS: {str(e)}")
+            # Continue - FAISS can be rebuilt later if needed
+        
+        # Clean up orphaned people and pets
+        try:
+            orphaned_people = store.cleanup_orphaned_people()
+            if orphaned_people:
+                logging.info(f"Cleaned up {len(orphaned_people)} orphaned people: {orphaned_people}")
+            
+            orphaned_pets = store.cleanup_orphaned_pets()
+            if orphaned_pets:
+                logging.info(f"Cleaned up {len(orphaned_pets)} orphaned pets: {orphaned_pets}")
+        except Exception as e:
+            logging.error(f"Failed to clean up orphaned records: {str(e)}")
+        
         message = f"Deleted {deleted_count} photo(s) from database"
+        if all_face_ids:
+            message += f" ({len(all_face_ids)} faces removed)"
+        if all_pet_detection_ids:
+            message += f" ({len(all_pet_detection_ids)} pet detections removed)"
         if files_deleted < deleted_count:
             message += f" ({files_deleted} files deleted from disk)"
         elif files_deleted == deleted_count:
@@ -155,6 +260,8 @@ async def delete_photos(photo_ids: List[int]):
             "status": "completed",
             "deleted": deleted_count,
             "files_deleted": files_deleted,
+            "faces_deleted": len(all_face_ids),
+            "pets_deleted": len(all_pet_detection_ids),
             "not_found": not_found,
             "errors": errors,
             "message": message
