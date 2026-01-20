@@ -1,13 +1,80 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
-import { objectsApi, Photo } from "../services/api";
-import { Box } from "lucide-react";
+import { CategorySummary, objectsApi, Photo, scenesApi, SceneSummary } from "../services/api";
+import { Box, ChevronDown } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
 
+const MAX_TAGS_PER_GROUP = 6;
+const FLORENCE_TAG_PREFIX = "florence:";
+const FLORENCE_MIN_PHOTO_COUNT = 2;
+const FLORENCE_MIN_AVG_CONFIDENCE = 0.7;
+
+type UnifiedCategory = {
+  id: string;
+  label: string;
+  source: "object" | "scene";
+  category?: string;
+  sceneLabels?: string[];
+  photoCount: number;
+};
+
+type GroupedCategory = {
+  key: string;
+  label: string;
+  items: UnifiedCategory[];
+  totalCount: number;
+};
+
+const FLORENCE_TAG_DEFINITIONS = [
+  {
+    key: "plants",
+    label: "Plants",
+    keywords: [
+      "plant",
+      "plants",
+      "tree",
+      "trees",
+      "forest",
+      "jungle",
+      "garden",
+      "botanical",
+      "park",
+      "orchard",
+      "vineyard",
+      "meadow",
+      "field",
+      "flower",
+      "flowers",
+      "greenhouse",
+      "nursery",
+    ],
+  },
+  {
+    key: "nature",
+    label: "Nature",
+    keywords: [
+      "mountain",
+      "valley",
+      "canyon",
+      "river",
+      "lake",
+      "waterfall",
+      "ocean",
+      "beach",
+      "coast",
+      "shore",
+      "desert",
+      "island",
+    ],
+  },
+];
+
 const ObjectsView: React.FC = () => {
-  const [categories, setCategories] = useState<string[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [groupedCategories, setGroupedCategories] = useState<GroupedCategory[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [expandedGroupTags, setExpandedGroupTags] = useState<Record<string, boolean>>({});
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
@@ -18,20 +85,41 @@ const ObjectsView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (selectedCategory) {
-      loadPhotosForCategory(selectedCategory);
-    } else {
+    if (!selectedCategoryId) {
       setPhotos([]);
+      return;
     }
-  }, [selectedCategory]);
+
+    const selection = groupedCategories
+      .flatMap((group) => group.items)
+      .find((item) => item.id === selectedCategoryId);
+
+    if (!selection) {
+      setPhotos([]);
+      return;
+    }
+
+    loadPhotosForSelection(selection);
+  }, [groupedCategories, selectedCategoryId]);
 
   const loadCategories = async () => {
     try {
       setLoading(true);
-      const data = await objectsApi.getCategories();
-      setCategories(data);
-      if (data.length > 0 && !selectedCategory) {
-        setSelectedCategory(data[0]);
+      const [objectData, florenceData] = await Promise.all([
+        objectsApi.getCategorySummary(),
+        scenesApi.getLabelSummary({
+          prefix: FLORENCE_TAG_PREFIX,
+          minPhotoCount: FLORENCE_MIN_PHOTO_COUNT,
+          minAvgConfidence: FLORENCE_MIN_AVG_CONFIDENCE,
+        }),
+      ]);
+      const filteredObjects = objectData.filter((item) => item.photo_count > 0);
+      const grouped = buildGroupedCategories(filteredObjects, florenceData);
+      setGroupedCategories(grouped);
+
+      if (grouped.length > 0 && !selectedCategoryId) {
+        setSelectedCategoryId(grouped[0].items[0]?.id ?? null);
+        setExpandedGroups((prev) => ({ ...prev, [grouped[0].key]: true }));
       }
     } catch (error) {
       console.error("Failed to load categories:", error);
@@ -40,17 +128,195 @@ const ObjectsView: React.FC = () => {
     }
   };
 
-  const loadPhotosForCategory = async (category: string) => {
+  const loadPhotosForSelection = async (selection: UnifiedCategory) => {
     try {
       setLoadingPhotos(true);
-      const data = await objectsApi.getPhotosByCategory(category);
-      setPhotos(data);
+      if (selection.source === "object" && selection.category) {
+        const data = await objectsApi.getPhotosByCategory(selection.category);
+        setPhotos(data);
+        return;
+      }
+      if (selection.source === "scene" && selection.sceneLabels) {
+        const data = await loadPhotosForScenes(selection.sceneLabels);
+        setPhotos(data);
+        return;
+      }
+      setPhotos([]);
     } catch (error) {
-      console.error("Failed to load photos for category:", error);
+      console.error("Failed to load photos for selection:", error);
     } finally {
       setLoadingPhotos(false);
     }
   };
+
+  const normalizeText = (text: string) =>
+    text
+      .replace(/[_-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  const buildGroupedCategories = (
+    objectItems: CategorySummary[],
+    florenceItems: SceneSummary[]
+  ): GroupedCategory[] => {
+    const groupedObjects = objectItems.reduce((acc, item) => {
+      const [group] = item.category.split(":");
+      const groupKey = (group || "general").toLowerCase();
+      const groupLabel = normalizeText(group || "General");
+
+      if (!acc[groupKey]) {
+        acc[groupKey] = { key: groupKey, label: groupLabel, items: [], totalCount: 0 };
+      }
+
+      acc[groupKey].items.push({
+        id: item.category,
+        label: formatCategoryLabel(item.category),
+        source: "object",
+        category: item.category,
+        photoCount: item.photo_count,
+      });
+      acc[groupKey].totalCount += item.photo_count;
+      return acc;
+    }, {} as Record<string, GroupedCategory>);
+
+    const florenceTags = buildFlorenceTags(florenceItems, new Set(Object.keys(groupedObjects)));
+    const groupedFlorenceTags: GroupedCategory[] = florenceTags.length
+      ? [
+          {
+            key: "nature",
+            label: "Nature",
+            items: florenceTags,
+            totalCount: florenceTags.reduce((sum, item) => sum + item.photoCount, 0),
+          },
+        ]
+      : [];
+
+    const grouped = [
+      ...Object.values(groupedObjects).map((group) => ({
+        ...group,
+        items: [...group.items].sort((a, b) => b.photoCount - a.photoCount || a.label.localeCompare(b.label)),
+      })),
+      ...groupedFlorenceTags,
+    ];
+
+    return grouped.sort((a, b) => b.totalCount - a.totalCount || a.label.localeCompare(b.label));
+  };
+
+  const buildFlorenceTags = (
+    items: SceneSummary[],
+    objectGroupKeys: Set<string>
+  ): UnifiedCategory[] => {
+    const tagBuckets = FLORENCE_TAG_DEFINITIONS.map((definition) => ({
+      definition,
+      labels: [] as string[],
+      totalCount: 0,
+    }));
+
+    items.forEach((item) => {
+      const label = item.label.startsWith(FLORENCE_TAG_PREFIX)
+        ? item.label.slice(FLORENCE_TAG_PREFIX.length)
+        : item.label;
+      const normalized = label.toLowerCase();
+      tagBuckets.forEach((bucket) => {
+        if (bucket.definition.keywords.some((keyword) => normalized.includes(keyword))) {
+          bucket.labels.push(item.label);
+          bucket.totalCount += item.photo_count;
+        }
+      });
+    });
+
+    return tagBuckets
+      .filter((bucket) => bucket.labels.length > 0)
+      // Two-stage fallback: only show Florence tags when object group is missing
+      .filter((bucket) => {
+        if (bucket.definition.key === "plants") {
+          return !objectGroupKeys.has("plant");
+        }
+        return true;
+      })
+      .map((bucket) => ({
+        id: `scene:${bucket.definition.key}`,
+        label: bucket.definition.label,
+        source: "scene",
+        sceneLabels: bucket.labels,
+        photoCount: bucket.totalCount,
+      }));
+  };
+
+  const findCategoryById = (groups: GroupedCategory[], id: string) => {
+    for (const group of groups) {
+      const match = group.items.find((item) => item.id === id);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  };
+
+  const loadPhotosForScenes = async (labels: string[]): Promise<Photo[]> => {
+    const results = await Promise.all(labels.map((label) => scenesApi.getPhotosByLabel(label)));
+    const merged = results.flat();
+    const unique = new Map<number, Photo>();
+    merged.forEach((photo) => unique.set(photo.id, photo));
+    return Array.from(unique.values());
+  };
+
+  const toggleGroup = (groupKey: string, categoriesInGroup: UnifiedCategory[]) => {
+    setExpandedGroups((prev) => {
+      const nextState = { ...prev, [groupKey]: !prev[groupKey] };
+
+      // Auto-select the first category when expanding a new group
+      if (!prev[groupKey] && categoriesInGroup.length > 0) {
+        setSelectedCategoryId((current) =>
+          current && categoriesInGroup.some((item) => item.id === current)
+            ? current
+            : categoriesInGroup[0].id
+        );
+      }
+
+      return nextState;
+    });
+  };
+
+  const toggleGroupTags = (groupKey: string) => {
+    setExpandedGroupTags((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }));
+  };
+
+  const formatCategoryLabel = (category: string) => {
+    const parts = category.split(":");
+    const detail = parts[1] || parts[0];
+    return normalizeText(detail);
+  };
+
+  const formatFullCategoryLabel = (category: string) => {
+    const [group, detail] = category.split(":");
+    const groupLabel = normalizeText(group || "General");
+    if (!detail) return groupLabel;
+    return `${groupLabel} • ${normalizeText(detail)}`;
+  };
+
+  const selectedCategory = useMemo(() => {
+    if (!selectedCategoryId) {
+      return null;
+    }
+    return findCategoryById(groupedCategories, selectedCategoryId);
+  }, [groupedCategories, selectedCategoryId]);
+
+  const selectedTitle = useMemo(() => {
+    if (!selectedCategory) {
+      return "Objects";
+    }
+    if (selectedCategory.source === "object" && selectedCategory.category) {
+      return formatFullCategoryLabel(selectedCategory.category);
+    }
+    if (selectedCategory.source === "scene") {
+      return `Nature • ${selectedCategory.label}`;
+    }
+    return selectedCategory.label;
+  }, [selectedCategory]);
+
+  const hasCategories = useMemo(() => groupedCategories.length > 0, [groupedCategories]);
 
   if (loading) {
     return (
@@ -63,7 +329,7 @@ const ObjectsView: React.FC = () => {
     );
   }
 
-  if (categories.length === 0) {
+  if (!hasCategories) {
     return (
       <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
         <div className="mb-10">
@@ -103,22 +369,68 @@ const ObjectsView: React.FC = () => {
         </p>
       </div>
 
-      {/* Category Filter */}
-      <div className="mb-8">
-        <div className="flex flex-wrap gap-3">
-          {categories.map((category) => (
-            <button
-              key={category}
-              onClick={() => setSelectedCategory(category)}
-              className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${selectedCategory === category
-                  ? "bg-brand-primary text-white dark:text-black shadow-lg shadow-brand-primary/20"
-                  : "bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border text-light-text-secondary dark:text-dark-text-secondary hover:border-brand-primary hover:text-brand-primary"
-                }`}
+      {/* Grouped, collapsible categories with simplified tags */}
+      <div className="mb-8 flex flex-col gap-3">
+        {groupedCategories.map((group) => {
+          const isExpanded = expandedGroups[group.key] ?? false;
+          const showAllTags = expandedGroupTags[group.key] ?? false;
+          const visibleItems = showAllTags ? group.items : group.items.slice(0, MAX_TAGS_PER_GROUP);
+          return (
+            <div
+              key={group.key}
+              className="border border-light-border dark:border-dark-border rounded-2xl bg-light-surface dark:bg-dark-surface px-4 py-3"
             >
-              {category}
-            </button>
-          ))}
-        </div>
+              <button
+                onClick={() => toggleGroup(group.key, group.items)}
+                className="w-full flex items-center justify-between text-left"
+              >
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.15em] text-brand-primary">
+                    {group.label}
+                  </p>
+                  <p className="text-light-text-secondary dark:text-dark-text-secondary text-sm">
+                    {group.items.length} tag{group.items.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <ChevronDown
+                  size={18}
+                  className={`text-brand-primary transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+                />
+              </button>
+
+              {isExpanded && (
+                <div className="mt-3 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+                  {visibleItems.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedCategoryId(item.id);
+                      }}
+                      className={`px-3 py-1.5 rounded-xl font-semibold text-xs transition-all ${selectedCategoryId === item.id
+                          ? "bg-brand-primary text-white dark:text-black shadow-lg shadow-brand-primary/20"
+                          : "bg-light-bg dark:bg-dark-bg text-light-text-secondary dark:text-dark-text-secondary hover:border-brand-primary border border-transparent hover:text-brand-primary"
+                        }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  {group.items.length > MAX_TAGS_PER_GROUP && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleGroupTags(group.key);
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-light-border dark:border-dark-border text-light-text-tertiary dark:text-dark-text-tertiary hover:border-brand-primary hover:text-brand-primary transition-all"
+                    >
+                      {showAllTags ? "Show fewer" : "Show all"}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Photos Grid */}
@@ -133,7 +445,7 @@ const ObjectsView: React.FC = () => {
         <div>
           <div className="mb-6">
             <h2 className="text-lg font-bold text-light-text-primary dark:text-dark-text-primary">
-              {selectedCategory} ({photos.length} photos)
+              {selectedTitle} ({photos.length} photos)
             </h2>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
@@ -165,7 +477,7 @@ const ObjectsView: React.FC = () => {
         <div className="flex items-center justify-center min-h-[400px]">
           <EmptyState
             icon={Box}
-            title={`No photos found for "${selectedCategory}"`}
+            title={`No photos found for "${selectedTitle}"`}
             description="Try selecting a different category or add more photos to your library."
           />
         </div>

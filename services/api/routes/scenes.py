@@ -1,10 +1,10 @@
 """Scene-related endpoints."""
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 
-from services.api.models import PhotoResponse, SceneResponse
+from services.api.models import PhotoResponse, SceneResponse, SceneSummaryResponse
 from services.ml.storage.sqlite_store import SQLiteStore
 
 router = APIRouter(prefix="/scenes", tags=["scenes"])
@@ -17,6 +17,27 @@ async def list_scene_labels():
     try:
         labels = store.get_all_scene_labels()
         return labels
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/summary", response_model=List[SceneSummaryResponse])
+async def list_scene_summary(
+    prefix: Optional[str] = None,
+    min_photo_count: int = 1,
+    min_avg_confidence: float = 0.0,
+):
+    """Get scene labels with photo counts and average confidence."""
+    store = SQLiteStore()
+    try:
+        summaries = store.get_scene_label_stats(prefix=prefix)
+        filtered = [
+            summary
+            for summary in summaries
+            if summary["photo_count"] >= min_photo_count
+            and summary["avg_confidence"] >= min_avg_confidence
+        ]
+        return filtered
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

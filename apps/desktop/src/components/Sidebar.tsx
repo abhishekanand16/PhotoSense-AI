@@ -45,7 +45,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
   const navItems = [
     { id: "photos", label: "Photos", icon: Image, count: stats?.total_photos ?? 0 },
     { id: "people", label: "People", icon: Users, count: stats?.total_people ?? 0 },
-    { id: "objects", label: "Objects", icon: Box, count: stats?.total_objects ?? 0 },
+    // Hide the object count to avoid showing misleading numbers
+    { id: "objects", label: "Objects", icon: Box, count: null },
     { id: "search", label: "Search", icon: Search, count: null },
     { id: "settings", label: "Settings", icon: Settings, count: null },
   ];
