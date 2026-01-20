@@ -13,7 +13,10 @@ import {
   BarChart3,
   Loader2,
   RefreshCw,
-  Scan
+  Scan,
+  HelpCircle,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 import Card from "../components/common/Card";
 
@@ -24,6 +27,42 @@ const SettingsView: React.FC = () => {
   const [scanMessage, setScanMessage] = useState("");
   const [stats, setStats] = useState<any>(null);
   const [updatingMetadata, setUpdatingMetadata] = useState(false);
+  const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+
+  const faqItems = [
+    {
+      question: "How do I add photos to my library?",
+      answer: "Click the 'Import' button in the top header or go to Settings and click 'Import Photos'. Select a folder containing your photos, and the app will automatically scan and organize them for you."
+    },
+    {
+      question: "Why are some faces not detected?",
+      answer: "Face detection works best with clear, front-facing photos. Very small faces, heavily obscured faces, or unusual angles might not be detected. You can try running 'Scan Faces' again from Settings to re-process your photos."
+    },
+    {
+      question: "How do I rename a person?",
+      answer: "Go to the People tab, hover over the person you want to rename, and click the small edit (pencil) icon next to their name. Type the new name and press Enter or click the checkmark to save."
+    },
+    {
+      question: "Is my data private and secure?",
+      answer: "Yes! PhotoSense-AI processes all your photos locally on your device. No images or personal data are ever uploaded to the cloud. Your memories stay completely private on your computer."
+    },
+    {
+      question: "What does 'Disconnected' status mean?",
+      answer: "If you see 'Disconnected' in red, it means the backend server isn't running. The app needs the server to process photos. Make sure to start it before using the app's features."
+    },
+    {
+      question: "How do I search for specific photos?",
+      answer: "Use the search bar at the top of the app. You can search by objects (like 'dog', 'car'), scenes (like 'beach', 'sunset'), or even descriptions like 'person wearing red shirt'. The AI will find matching photos."
+    },
+    {
+      question: "Why is processing taking a long time?",
+      answer: "Processing time depends on the number of photos and your computer's speed. The AI analyzes each photo for faces, objects, and scenes. Large libraries may take several minutes. You can see the progress in the header."
+    },
+    {
+      question: "Can I delete photos from the app?",
+      answer: "PhotoSense-AI only indexes and organizes your photos - it doesn't modify or delete your original files. To remove photos, delete them from your computer and re-import the folder."
+    }
+  ];
 
   useEffect(() => {
     loadStats();
@@ -419,6 +458,47 @@ const SettingsView: React.FC = () => {
             </p>
           </div>
         </section>
+      </div>
+
+      {/* Help Section - Full Width */}
+      <div className="mt-12 max-w-5xl">
+        <div className="flex items-center gap-2 mb-4">
+          <HelpCircle size={16} className="text-brand-primary" />
+          <h2 className="text-sm font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest">
+            Help & FAQ
+          </h2>
+        </div>
+        <Card className="p-6">
+          <div className="space-y-2">
+            {faqItems.map((item, index) => (
+              <div 
+                key={index}
+                className="border border-light-border dark:border-dark-border rounded-xl overflow-hidden"
+              >
+                <button
+                  onClick={() => setExpandedFaq(expandedFaq === index ? null : index)}
+                  className="w-full flex items-center justify-between p-4 text-left hover:bg-light-bg dark:hover:bg-dark-bg/50 transition-colors"
+                >
+                  <span className="font-bold text-light-text-primary dark:text-dark-text-primary pr-4">
+                    {item.question}
+                  </span>
+                  {expandedFaq === index ? (
+                    <ChevronUp size={18} className="text-brand-primary flex-shrink-0" />
+                  ) : (
+                    <ChevronDown size={18} className="text-light-text-tertiary dark:text-dark-text-tertiary flex-shrink-0" />
+                  )}
+                </button>
+                {expandedFaq === index && (
+                  <div className="px-4 pb-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary leading-relaxed">
+                      {item.answer}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </div>
   );

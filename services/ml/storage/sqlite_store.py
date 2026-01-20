@@ -1,6 +1,8 @@
 """SQLite database for metadata storage."""
 
 import sqlite3
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -11,14 +13,52 @@ import numpy as np
 class SQLiteStore:
     """Manages SQLite database for photo metadata, faces, objects, and clusters."""
 
+    # Class-level lock for write serialization
+    _write_lock = threading.Lock()
+
     def __init__(self, db_path: str = "photosense.db"):
         """Initialize database connection."""
         self.db_path = db_path
         self._init_schema()
 
+    @contextmanager
+    def _get_connection(self, readonly: bool = False):
+        """Context manager for database connections with WAL mode."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        if readonly:
+            conn.execute("PRAGMA query_only=ON")
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _transaction(self):
+        """Context manager for write transactions with locking."""
+        with self._write_lock:
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
     def _init_schema(self) -> None:
         """Create database tables if they don't exist."""
         conn = sqlite3.connect(self.db_path, timeout=30)
+        # Enable WAL mode for better concurrency
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         cursor = conn.cursor()
 
         # Photos table
@@ -116,6 +156,53 @@ class SQLiteStore:
             )
         """)
 
+        # =====================================================================
+        # PET IDENTITY TABLES (for pet recognition & grouping similar to faces)
+        # =====================================================================
+        
+        # Pets table (like people - stores unique pet identities)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id INTEGER,
+                name TEXT,
+                species TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Pet detections table (like faces - stores individual pet detections)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pet_detections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL,
+                bbox_x INTEGER NOT NULL,
+                bbox_y INTEGER NOT NULL,
+                bbox_w INTEGER NOT NULL,
+                bbox_h INTEGER NOT NULL,
+                species TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                embedding_id INTEGER,
+                cluster_id INTEGER,
+                pet_id INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+                FOREIGN KEY (pet_id) REFERENCES pets(id)
+            )
+        """)
+        
+        # Pet embeddings table (stores CLIP embeddings for pet identity)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pet_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pet_detection_id INTEGER UNIQUE NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (pet_detection_id) REFERENCES pet_detections(id) ON DELETE CASCADE
+            )
+        """)
+
         # Create indexes only if the tables and columns exist
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path)")
@@ -160,6 +247,29 @@ class SQLiteStore:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_scenes_photo ON scenes(photo_id)")
             if "scene_label" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_scenes_label ON scenes(scene_label)")
+        except sqlite3.OperationalError:
+            pass
+
+        # Pet-related indexes
+        try:
+            cursor.execute("PRAGMA table_info(pet_detections)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "photo_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_pet_detections_photo ON pet_detections(photo_id)")
+            if "pet_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_pet_detections_pet ON pet_detections(pet_id)")
+            if "cluster_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_pet_detections_cluster ON pet_detections(cluster_id)")
+            if "species" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_pet_detections_species ON pet_detections(species)")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("PRAGMA table_info(pet_embeddings)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "pet_detection_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_pet_embeddings_detection ON pet_embeddings(pet_detection_id)")
         except sqlite3.OperationalError:
             pass
 
@@ -264,6 +374,44 @@ class SQLiteStore:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def add_face_with_embedding(
+        self,
+        photo_id: int,
+        bbox_x: int,
+        bbox_y: int,
+        bbox_w: int,
+        bbox_h: int,
+        confidence: float,
+        embedding: np.ndarray,
+        cluster_id: Optional[int] = None,
+        person_id: Optional[int] = None,
+    ) -> int:
+        """Add face and embedding atomically in single transaction. Returns face_id."""
+        with self._transaction() as conn:
+            cursor = conn.cursor()
+            # 1. Insert face
+            cursor.execute(
+                """
+                INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, cluster_id, person_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, cluster_id, person_id),
+            )
+            face_id = cursor.lastrowid
+            
+            # 2. Store embedding
+            embedding_bytes = embedding.tobytes()
+            cursor.execute(
+                "INSERT INTO embeddings (face_id, embedding) VALUES (?, ?)",
+                (face_id, embedding_bytes),
+            )
+            embedding_id = cursor.lastrowid
+            
+            # 3. Update face with embedding_id reference
+            cursor.execute("UPDATE faces SET embedding_id = ? WHERE id = ?", (embedding_id, face_id))
+            
+            return face_id
 
     def add_face(
         self,
@@ -714,3 +862,355 @@ class SQLiteStore:
         count = cursor.fetchone()[0]
         conn.close()
         return count
+
+    # =========================================================================
+    # PET IDENTITY METHODS (parallel to face/people methods)
+    # =========================================================================
+
+    def add_pet_detection_with_embedding(
+        self,
+        photo_id: int,
+        bbox_x: int,
+        bbox_y: int,
+        bbox_w: int,
+        bbox_h: int,
+        species: str,
+        confidence: float,
+        embedding: np.ndarray,
+        cluster_id: Optional[int] = None,
+        pet_id: Optional[int] = None,
+    ) -> int:
+        """Add pet detection and embedding atomically in single transaction. Returns pet_detection_id."""
+        with self._transaction() as conn:
+            cursor = conn.cursor()
+            # 1. Insert pet detection
+            cursor.execute(
+                """
+                INSERT INTO pet_detections (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, species, confidence, cluster_id, pet_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, species, confidence, cluster_id, pet_id),
+            )
+            pet_detection_id = cursor.lastrowid
+            
+            # 2. Store embedding
+            embedding_bytes = embedding.tobytes()
+            cursor.execute(
+                "INSERT INTO pet_embeddings (pet_detection_id, embedding) VALUES (?, ?)",
+                (pet_detection_id, embedding_bytes),
+            )
+            embedding_id = cursor.lastrowid
+            
+            # 3. Update detection with embedding_id reference
+            cursor.execute("UPDATE pet_detections SET embedding_id = ? WHERE id = ?", (embedding_id, pet_detection_id))
+            
+            return pet_detection_id
+
+    def add_pet_detection(
+        self,
+        photo_id: int,
+        bbox_x: int,
+        bbox_y: int,
+        bbox_w: int,
+        bbox_h: int,
+        species: str,
+        confidence: float,
+        embedding_id: Optional[int] = None,
+        cluster_id: Optional[int] = None,
+        pet_id: Optional[int] = None,
+    ) -> int:
+        """Add a detected pet. Returns pet_detection_id."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO pet_detections (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, species, confidence, embedding_id, cluster_id, pet_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, species, confidence, embedding_id, cluster_id, pet_id),
+        )
+        pet_detection_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return pet_detection_id
+
+    def get_pet_detections_for_photo(self, photo_id: int) -> List[Dict]:
+        """Get all pet detections for a photo."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pet_detections WHERE photo_id = ?", (photo_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_pet_detection(self, pet_detection_id: int) -> Optional[Dict]:
+        """Get pet detection by ID."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pet_detections WHERE id = ?", (pet_detection_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_pet_detection_embedding(self, pet_detection_id: int, embedding_id: int) -> None:
+        """Update pet detection with embedding ID."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE pet_detections SET embedding_id = ? WHERE id = ?", (embedding_id, pet_detection_id))
+        conn.commit()
+        conn.close()
+
+    def update_pet_detection_cluster(self, pet_detection_id: int, cluster_id: Optional[int]) -> None:
+        """Update pet detection cluster assignment."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE pet_detections SET cluster_id = ? WHERE id = ?", (cluster_id, pet_detection_id))
+        conn.commit()
+        conn.close()
+
+    def update_pet_detection_pet(self, pet_detection_id: int, pet_id: Optional[int]) -> None:
+        """Update pet detection pet assignment."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE pet_detections SET pet_id = ? WHERE id = ?", (pet_id, pet_detection_id))
+        conn.commit()
+        conn.close()
+
+    def get_pet_detections_for_pet(self, pet_id: int) -> List[Dict]:
+        """Get all pet detections for a pet identity."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pet_detections WHERE pet_id = ?", (pet_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_pet_detections_by_species(self, species: str) -> List[Dict]:
+        """Get all pet detections of a species."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pet_detections WHERE species = ?", (species,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def store_pet_embedding(self, pet_detection_id: int, embedding: np.ndarray) -> int:
+        """Store pet embedding (CLIP 768-dim). Returns embedding_id."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        embedding_bytes = embedding.tobytes()
+        cursor.execute(
+            "INSERT OR REPLACE INTO pet_embeddings (pet_detection_id, embedding) VALUES (?, ?)",
+            (pet_detection_id, embedding_bytes),
+        )
+        embedding_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return embedding_id
+
+    def get_pet_embedding(self, pet_detection_id: int) -> Optional[np.ndarray]:
+        """Retrieve embedding for a pet detection."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT embedding FROM pet_embeddings WHERE pet_detection_id = ?", (pet_detection_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row is None:
+            return None
+        
+        # Convert bytes back to numpy array (768-dim float32 for CLIP)
+        embedding = np.frombuffer(row[0], dtype=np.float32)
+        return embedding
+
+    def get_all_pet_embeddings_with_detections(self) -> List[Tuple[int, np.ndarray]]:
+        """Get all pet embeddings with pet_detection_ids. Returns list of (pet_detection_id, embedding)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT pet_detection_id, embedding FROM pet_embeddings")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        results = []
+        for pet_detection_id, embedding_bytes in rows:
+            embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
+            results.append((pet_detection_id, embedding))
+        
+        return results
+
+    def create_pet(self, cluster_id: Optional[int] = None, name: Optional[str] = None, species: Optional[str] = None) -> int:
+        """Create a pet identity entry. Returns pet_id."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute(
+            "INSERT INTO pets (cluster_id, name, species, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (cluster_id, name, species, now, now),
+        )
+        pet_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return pet_id
+
+    def get_pet(self, pet_id: int) -> Optional[Dict]:
+        """Get pet by ID."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_pet_by_cluster_id(self, cluster_id: int) -> Optional[Dict]:
+        """Get a pet by cluster_id. Returns None if not found."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pets WHERE cluster_id = ? LIMIT 1", (cluster_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_all_pets(self) -> List[Dict]:
+        """Get all pets."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pets ORDER BY name, id")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def update_pet_name(self, pet_id: int, name: str) -> None:
+        """Update pet name."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE pets SET name = ?, updated_at = ? WHERE id = ?",
+            (name, datetime.now().isoformat(), pet_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def update_pet_species(self, pet_id: int, species: str) -> None:
+        """Update pet species."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE pets SET species = ?, updated_at = ? WHERE id = ?",
+            (species, datetime.now().isoformat(), pet_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def merge_pets(self, source_pet_id: int, target_pet_id: int) -> None:
+        """Merge source pet into target pet."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE pet_detections SET pet_id = ? WHERE pet_id = ?", (target_pet_id, source_pet_id))
+        cursor.execute("DELETE FROM pets WHERE id = ?", (source_pet_id,))
+        conn.commit()
+        conn.close()
+
+    def delete_pet(self, pet_id: int) -> bool:
+        """Delete a pet and unassign all detections. Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE pet_detections SET pet_id = NULL WHERE pet_id = ?", (pet_id,))
+            cursor.execute("DELETE FROM pets WHERE id = ?", (pet_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+
+    def delete_pet_detection(self, pet_detection_id: int) -> bool:
+        """Delete a pet detection and its embedding. Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM pet_embeddings WHERE pet_detection_id = ?", (pet_detection_id,))
+            cursor.execute("DELETE FROM pet_detections WHERE id = ?", (pet_detection_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+
+    def get_pet_detections_without_clusters(self) -> List[Dict]:
+        """Get all pet detections that haven't been clustered yet."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pet_detections WHERE cluster_id IS NULL")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def count_pet_detections_without_clusters(self) -> int:
+        """Count pet detections that haven't been clustered yet."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM pet_detections WHERE cluster_id IS NULL")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    def update_pet_detections_cluster(self, pet_detection_ids: List[int], cluster_id: Optional[int]) -> None:
+        """Batch update cluster for multiple pet detections."""
+        if not pet_detection_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(pet_detection_ids))
+        cursor.execute(f"UPDATE pet_detections SET cluster_id = ? WHERE id IN ({placeholders})", [cluster_id] + pet_detection_ids)
+        conn.commit()
+        conn.close()
+
+    def update_pet_detections_pet(self, pet_detection_ids: List[int], pet_id: Optional[int]) -> None:
+        """Batch update pet for multiple pet detections."""
+        if not pet_detection_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(pet_detection_ids))
+        cursor.execute(f"UPDATE pet_detections SET pet_id = ? WHERE id IN ({placeholders})", [pet_id] + pet_detection_ids)
+        conn.commit()
+        conn.close()
+
+    def get_photos_with_pets(self) -> List[int]:
+        """Get all photo IDs that contain pet detections."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT photo_id FROM pet_detections")
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def get_pet_statistics(self) -> Dict:
+        """Get pet-related statistics."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        stats = {}
+        cursor.execute("SELECT COUNT(*) FROM pets")
+        stats["total_pets"] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM pet_detections")
+        stats["total_pet_detections"] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT pet_id) FROM pet_detections WHERE pet_id IS NOT NULL")
+        stats["assigned_pet_detections"] = cursor.fetchone()[0]
+        cursor.execute("SELECT species, COUNT(*) FROM pet_detections GROUP BY species")
+        stats["species_counts"] = {row[0]: row[1] for row in cursor.fetchall()}
+        conn.close()
+        return stats

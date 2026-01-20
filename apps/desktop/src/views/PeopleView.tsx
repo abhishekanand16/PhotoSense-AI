@@ -151,7 +151,8 @@ const PeopleView: React.FC = () => {
                     {person.name || `Unnamed Person`}
                   </span>
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setEditingId(person.id);
                       setEditName(person.name || "");
                     }}

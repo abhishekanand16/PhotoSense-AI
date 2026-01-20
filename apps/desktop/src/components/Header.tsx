@@ -173,7 +173,7 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
                     : "fill-red-500 text-red-500"
                   } 
                 />
-                <span className="text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-wider">
+                <span className={`text-xs font-bold uppercase tracking-wider ${isBackendConnected ? "text-light-text-tertiary dark:text-dark-text-tertiary" : "text-red-500"}`}>
                   {isBackendConnected ? "Ready" : "Disconnected"}
                 </span>
               </>

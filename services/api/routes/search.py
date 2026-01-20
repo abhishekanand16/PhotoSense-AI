@@ -56,9 +56,26 @@ async def search_photos(request: SearchRequest):
                     except Exception as e:
                         logging.warning(f"Object search failed for pattern '{pattern}': {e}")
             
-            # Combine results (OR logic - photos matching scenes OR objects)
-            if scene_photo_ids or object_photo_ids:
-                candidate_ids = scene_photo_ids | object_photo_ids
+            # Priority 2.5: Pet detection matches (for animal-related queries)
+            pet_photo_ids = set()
+            pet_species = ['dog', 'cat', 'bird', 'horse', 'animal']
+            query_lower = request.query.lower()
+            is_pet_query = any(species in query_lower for species in ['dog', 'cat', 'bird', 'horse', 'pet', 'puppy', 'kitten', 'animal'])
+            
+            if is_pet_query:
+                try:
+                    # Search pet detections by species
+                    for species in pet_species:
+                        if species in query_lower or 'pet' in query_lower or 'animal' in query_lower:
+                            detections = store.get_pet_detections_by_species(species)
+                            for det in detections:
+                                pet_photo_ids.add(det["photo_id"])
+                except Exception as e:
+                    logging.warning(f"Pet search failed: {e}")
+            
+            # Combine results (OR logic - photos matching scenes OR objects OR pets)
+            if scene_photo_ids or object_photo_ids or pet_photo_ids:
+                candidate_ids = scene_photo_ids | object_photo_ids | pet_photo_ids
             
             # Priority 3: CLIP semantic search fallback
             if not candidate_ids or should_use_clip:

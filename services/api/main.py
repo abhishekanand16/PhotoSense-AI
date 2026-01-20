@@ -1,9 +1,15 @@
 """FastAPI application entry point."""
 
+from PIL import Image
+
+# Configure PIL to support large images (up to 250MP)
+# Default limit is ~89MP, which triggers DecompressionBombWarning
+Image.MAX_IMAGE_PIXELS = 250_000_000  # 250 megapixels
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from services.api.routes import faces, objects, people, photos, scan, scenes, search, stats
+from services.api.routes import faces, objects, people, pets, photos, scan, scenes, search, stats
 
 app = FastAPI(
     title="PhotoSense-AI API",
@@ -23,6 +29,7 @@ app.add_middleware(
 # Register routes
 app.include_router(photos.router)
 app.include_router(people.router)
+app.include_router(pets.router)
 app.include_router(faces.router)
 app.include_router(scan.router)
 app.include_router(search.router)

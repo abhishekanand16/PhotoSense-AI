@@ -1,6 +1,7 @@
 """FAISS vector index management for embeddings."""
 
 import pickle
+import threading
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -9,7 +10,7 @@ import numpy as np
 
 
 class FAISSIndex:
-    """Manages FAISS indices for different embedding types."""
+    """Manages FAISS indices for different embedding types with thread-safe writes."""
 
     def __init__(self, index_dir: str = "data/indices"):
         """Initialize index directory."""
@@ -17,6 +18,8 @@ class FAISSIndex:
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self._indices: dict[str, faiss.Index] = {}
         self._id_maps: dict[str, dict[int, int]] = {}  # FAISS ID -> entity ID
+        # Lock for serializing write operations (add, save, create)
+        self._write_lock = threading.Lock()
 
     def _get_index_path(self, embedding_type: str) -> Path:
         """Get path for index file."""
@@ -27,48 +30,51 @@ class FAISSIndex:
         return self.index_dir / f"{embedding_type}_ids.pkl"
 
     def create_index(self, embedding_type: str, dimension: int, metric: str = "L2") -> None:
-        """Create a new FAISS index."""
-        if metric == "L2":
-            index = faiss.IndexFlatL2(dimension)
-        elif metric == "cosine":
-            index = faiss.IndexFlatIP(dimension)
-            # For cosine similarity, we normalize vectors
-        else:
-            raise ValueError(f"Unknown metric: {metric}")
+        """Create a new FAISS index (thread-safe)."""
+        with self._write_lock:
+            if metric == "L2":
+                index = faiss.IndexFlatL2(dimension)
+            elif metric == "cosine":
+                index = faiss.IndexFlatIP(dimension)
+                # For cosine similarity, we normalize vectors
+            else:
+                raise ValueError(f"Unknown metric: {metric}")
 
-        self._indices[embedding_type] = index
-        self._id_maps[embedding_type] = {}
+            self._indices[embedding_type] = index
+            self._id_maps[embedding_type] = {}
 
     def load_index(self, embedding_type: str) -> bool:
-        """Load index from disk. Returns True if successful."""
+        """Load index from disk (thread-safe). Returns True if successful."""
         index_path = self._get_index_path(embedding_type)
         id_map_path = self._get_id_map_path(embedding_type)
 
         if not index_path.exists():
             return False
 
-        try:
-            self._indices[embedding_type] = faiss.read_index(str(index_path))
-            if id_map_path.exists():
-                with open(id_map_path, "rb") as f:
-                    self._id_maps[embedding_type] = pickle.load(f)
-            else:
-                self._id_maps[embedding_type] = {}
-            return True
-        except Exception:
-            return False
+        with self._write_lock:
+            try:
+                self._indices[embedding_type] = faiss.read_index(str(index_path))
+                if id_map_path.exists():
+                    with open(id_map_path, "rb") as f:
+                        self._id_maps[embedding_type] = pickle.load(f)
+                else:
+                    self._id_maps[embedding_type] = {}
+                return True
+            except Exception:
+                return False
 
     def save_index(self, embedding_type: str) -> None:
-        """Save index to disk."""
+        """Save index to disk (thread-safe)."""
         if embedding_type not in self._indices:
             return
 
-        index_path = self._get_index_path(embedding_type)
-        id_map_path = self._get_id_map_path(embedding_type)
+        with self._write_lock:
+            index_path = self._get_index_path(embedding_type)
+            id_map_path = self._get_id_map_path(embedding_type)
 
-        faiss.write_index(self._indices[embedding_type], str(index_path))
-        with open(id_map_path, "wb") as f:
-            pickle.dump(self._id_maps[embedding_type], f)
+            faiss.write_index(self._indices[embedding_type], str(index_path))
+            with open(id_map_path, "wb") as f:
+                pickle.dump(self._id_maps[embedding_type], f)
 
     def add_vectors(
         self,
@@ -76,23 +82,25 @@ class FAISSIndex:
         vectors: np.ndarray,
         entity_ids: List[int],
     ) -> None:
-        """Add vectors to index with entity IDs."""
+        """Add vectors to index with entity IDs (thread-safe)."""
         if embedding_type not in self._indices:
             raise ValueError(f"Index {embedding_type} does not exist. Create it first.")
 
-        index = self._indices[embedding_type]
-        id_map = self._id_maps[embedding_type]
+        with self._write_lock:
+            index = self._indices[embedding_type]
+            id_map = self._id_maps[embedding_type]
 
-        # Normalize for cosine similarity if needed
-        if isinstance(index, faiss.IndexFlatIP):
-            faiss.normalize_L2(vectors)
+            # Normalize for cosine similarity if needed
+            vectors_copy = vectors.astype(np.float32).copy()
+            if isinstance(index, faiss.IndexFlatIP):
+                faiss.normalize_L2(vectors_copy)
 
-        start_id = index.ntotal
-        index.add(vectors.astype(np.float32))
+            start_id = index.ntotal
+            index.add(vectors_copy)
 
-        # Map FAISS IDs to entity IDs
-        for i, entity_id in enumerate(entity_ids):
-            id_map[start_id + i] = entity_id
+            # Map FAISS IDs to entity IDs
+            for i, entity_id in enumerate(entity_ids):
+                id_map[start_id + i] = entity_id
 
     def search(
         self,
