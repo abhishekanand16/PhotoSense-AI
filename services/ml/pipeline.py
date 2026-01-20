@@ -88,13 +88,13 @@ from services.ml.utils import extract_exif_metadata
 # Scene fusion configuration
 SCENE_FUSION_CONFIG = {
     # Maximum number of final scene tags per image
-    "max_tags": 8,
+    "max_tags": 10,
     # Minimum confidence for Places365 tags
-    "places365_min_confidence": 0.15,
+    "places365_min_confidence": 0.30,
     # Minimum confidence for CLIP tags
-    "clip_min_confidence": 0.25,
+    "clip_min_confidence": 0.40,
     # Minimum confidence for Florence-2 tags
-    "florence_min_confidence": 0.60,
+    "florence_min_confidence": 0.70,
     # YOLO object categories that imply scene tags
     "yolo_scene_implications": {
         "animal:dog": ["outdoor"],
@@ -106,6 +106,12 @@ SCENE_FUSION_CONFIG = {
         "sports:surfboard": ["beach", "water"],
         "sports:skis": ["snow", "mountain"],
         "plant:potted plant": ["indoor", "garden"],
+    },
+    # Generic tags to filter out during tagging
+    "generic_tags_filter": {
+        "outdoor", "indoor", "photo", "image", "picture", "scene",
+        "view", "background", "foreground", "object", "item", "thing",
+        "stuff", "area", "place", "location"
     },
 }
 
@@ -499,10 +505,12 @@ class MLPipeline:
         # 3. Florence-2 Vision-Language Tags
         # =====================================================================
         try:
+            generic_filter = SCENE_FUSION_CONFIG.get("generic_tags_filter", set())
             florence_detections = self.florence_detector.get_scene_tags(image_path)
             for tag, confidence in florence_detections:
+                # Filter generic tags and apply confidence threshold
                 if confidence >= SCENE_FUSION_CONFIG["florence_min_confidence"]:
-                    if tag not in seen_tags:
+                    if tag not in seen_tags and tag not in generic_filter:
                         all_tags.append((tag, confidence, 'florence'))
                         seen_tags.add(tag)
         except Exception as e:
@@ -723,7 +731,7 @@ class MLPipeline:
         self, 
         query_text: str, 
         k: int = 10,
-        min_similarity: float = 0.20,
+        min_similarity: float = 0.25,
         return_scores: bool = False
     ) -> List[int]:
         """
@@ -733,10 +741,10 @@ class MLPipeline:
             query_text: Natural language query (e.g., "beach sunset", "dog playing")
             k: Maximum number of results to return
             min_similarity: Minimum cosine similarity threshold (0-1). 
-                           Default 0.20 filters out weak matches.
-                           - 0.30+ = strong match (very relevant)
-                           - 0.20-0.30 = moderate match (somewhat relevant)
-                           - <0.20 = weak match (likely irrelevant noise)
+                           Default 0.25 filters out weak matches.
+                           - 0.35+ = strong match (very relevant)
+                           - 0.25-0.35 = moderate match (somewhat relevant)
+                           - <0.25 = weak match (likely irrelevant noise)
             return_scores: If True, return list of (photo_id, similarity) tuples
             
         Returns:

@@ -583,6 +583,57 @@ class SQLiteStore:
         conn.close()
         return [row[0] for row in rows]
 
+    def search_scenes_by_text(self, query: str, min_confidence: float = 0.5) -> List[Dict]:
+        """
+        Search scenes table using text matching (finds Florence-2 rich tags).
+        
+        This is the PRIMARY method for utilizing Florence-2 tags.
+        Florence-2 generates descriptive tags like "crescent moon", "palm tree silhouette",
+        "golden sunset over ocean" - this method finds them.
+        
+        Args:
+            query: Search term (e.g., "moon" matches "crescent moon", "full moon")
+            min_confidence: Minimum confidence threshold
+            
+        Returns:
+            List of dicts with photo_id, scene_label, confidence
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Split query into words for better matching
+        words = query.lower().strip().split()
+        
+        if len(words) == 1:
+            # Single word - use LIKE for partial match
+            cursor.execute(
+                """
+                SELECT DISTINCT photo_id, scene_label, confidence 
+                FROM scenes 
+                WHERE LOWER(scene_label) LIKE ? AND confidence >= ?
+                ORDER BY confidence DESC
+                """,
+                (f"%{words[0]}%", min_confidence)
+            )
+        else:
+            # Multiple words - match any word
+            placeholders = " OR ".join(["LOWER(scene_label) LIKE ?" for _ in words])
+            params = [f"%{word}%" for word in words] + [min_confidence]
+            cursor.execute(
+                f"""
+                SELECT DISTINCT photo_id, scene_label, confidence 
+                FROM scenes 
+                WHERE ({placeholders}) AND confidence >= ?
+                ORDER BY confidence DESC
+                """,
+                params
+            )
+        
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
     def get_all_scene_labels(self) -> List[str]:
         """Get all unique scene labels."""
         conn = sqlite3.connect(self.db_path, timeout=30)

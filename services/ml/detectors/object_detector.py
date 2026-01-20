@@ -111,10 +111,11 @@ class ObjectDetector:
         "toothbrush": "item",
     }
 
-    def __init__(self, confidence_threshold: float = 0.5, model_size: str = "n"):
+    def __init__(self, confidence_threshold: float = 0.55, model_size: str = "n"):
         """
         Initialize object detector.
         model_size: 'n' (nano), 's' (small), 'm' (medium), 'l' (large), 'x' (xlarge)
+        confidence_threshold: Minimum confidence (0.55 balances precision vs recall)
         """
         self.confidence_threshold = confidence_threshold
         self.model_size = model_size
