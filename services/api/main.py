@@ -1,5 +1,11 @@
 """FastAPI application entry point."""
 
+from PIL import Image
+
+# Configure PIL to support large images (up to 250MP)
+# Default limit is ~89MP, which triggers DecompressionBombWarning
+Image.MAX_IMAGE_PIXELS = 250_000_000  # 250 megapixels
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
