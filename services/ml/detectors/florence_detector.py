@@ -33,11 +33,18 @@ class FlorenceDetector:
         'than', 'too', 'very', 'this', 'that', 'these', 'those'
     }
     
+    # Generic/overly broad tags to filter
+    GENERIC_TAGS = {
+        'photo', 'image', 'picture', 'scene', 'view', 'background',
+        'foreground', 'object', 'item', 'thing', 'stuff', 'area',
+        'place', 'location', 'shot', 'photograph', 'pic'
+    }
+    
     # Maximum tags to extract
-    MAX_TAGS = 12
+    MAX_TAGS = 10
     
     # Minimum confidence for tags
-    MIN_TAG_CONFIDENCE = 0.5
+    MIN_TAG_CONFIDENCE = 0.6
     
     def __init__(self):
         """Initialize Florence-2 detector with lazy loading."""
@@ -256,7 +263,7 @@ class FlorenceDetector:
             caption: Caption text
         
         Returns:
-            List of normalized tags (lowercase, deduplicated)
+            List of normalized tags (lowercase, deduplicated, filtered)
         """
         if not caption:
             return []
@@ -267,10 +274,12 @@ class FlorenceDetector:
         # Extract words (alphanumeric only)
         words = re.findall(r'\b[a-z]+\b', caption)
         
-        # Filter stopwords and short words
+        # Filter stopwords, generic tags, and short words
         meaningful_words = [
             w for w in words 
-            if w not in self.STOPWORDS and len(w) > 2
+            if w not in self.STOPWORDS 
+            and w not in self.GENERIC_TAGS
+            and len(w) > 2
         ]
         
         # Deduplicate while preserving order
@@ -331,11 +340,15 @@ class FlorenceDetector:
         _, tags = self.detect(image_path)
         
         # Assign confidence based on position (earlier = more relevant)
+        # Use higher confidence range since Florence-2 is high quality
         results = []
         for i, tag in enumerate(tags):
-            # Confidence decreases from 0.9 to 0.6 based on position
-            confidence = 0.9 - (i * 0.3 / len(tags)) if tags else 0.5
-            confidence = max(0.6, confidence)  # Floor at 0.6
+            # Confidence decreases from 0.95 to 0.70 based on position
+            if len(tags) > 0:
+                confidence = 0.95 - (i * 0.25 / len(tags))
+                confidence = max(0.70, confidence)  # Floor at 0.70
+            else:
+                confidence = 0.70
             results.append((tag, confidence))
         
         return results

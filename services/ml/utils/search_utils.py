@@ -45,14 +45,18 @@ class SearchQueryProcessor:
         'stream': ['water', 'nature', 'forest'],
         
         # Sky & Weather
-        'sunset': ['sunset', 'sky', 'outdoor'],
-        'sunrise': ['sunrise', 'sky', 'outdoor'],
-        'sky': ['sky', 'outdoor'],
-        'cloud': ['sky', 'outdoor'],
-        'clouds': ['sky', 'outdoor'],
+        'sunset': ['sunset', 'sky'],
+        'sunrise': ['sunrise', 'sky'],
+        'sky': ['sky'],
+        'cloud': ['sky'],
+        'clouds': ['sky'],
         'rain': ['outdoor'],
-        'snow': ['snow', 'outdoor', 'mountain'],
-        'snowy': ['snow', 'outdoor', 'mountain'],
+        'snow': ['snow', 'mountain'],
+        'snowy': ['snow', 'mountain'],
+        'sun': ['sunset', 'sunrise'],
+        'moon': ['night'],
+        'stars': ['night'],
+        'star': ['night'],
         
         # Urban
         'city': ['city', 'building', 'street', 'urban', 'outdoor'],
@@ -241,12 +245,20 @@ class SearchQueryProcessor:
         # Extract object variations
         object_patterns = SearchQueryProcessor.get_object_variations(query)
         
+        # Specific visual concepts that benefit from CLIP semantic search
+        clip_priority_keywords = [
+            'moon', 'sun', 'star', 'stars', 'sunset', 'sunrise',
+            'rainbow', 'lightning', 'aurora', 'galaxy', 'constellation'
+        ]
+        
         # Determine if we should use CLIP fallback
-        # Use CLIP if: complex query, no matches, or very specific/creative query
+        # Use CLIP if: complex query, no matches, visual concepts, or similarity query
+        query_lower = query.lower()
         should_use_clip = (
             len(query.split()) > 3 or  # Complex multi-word query
             (not scene_tags and not object_patterns) or  # No matches found
-            any(word in query.lower() for word in ['like', 'similar', 'reminds', 'looks'])  # Similarity query
+            any(word in query_lower for word in clip_priority_keywords) or  # Specific visual concepts
+            any(word in query_lower for word in ['like', 'similar', 'reminds', 'looks'])  # Similarity query
         )
         
         return {
