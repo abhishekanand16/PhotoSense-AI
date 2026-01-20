@@ -723,7 +723,7 @@ class MLPipeline:
         self, 
         query_text: str, 
         k: int = 10,
-        min_similarity: float = 0.20
+        min_similarity: float = 0.26
     ) -> List[int]:
         """
         Search for similar images using text query with similarity filtering.
@@ -733,9 +733,10 @@ class MLPipeline:
             k: Maximum number of results to return
             min_similarity: Minimum cosine similarity threshold (0-1).
                            Results below this threshold are filtered out.
-                           - 0.30+ = Strong semantic match
-                           - 0.20-0.30 = Moderate match (potentially relevant)
-                           - <0.20 = Weak match (usually irrelevant noise)
+                           - 0.30+ = Strong semantic match (image clearly contains concept)
+                           - 0.26-0.30 = Good match (likely relevant)
+                           - 0.22-0.26 = Weak match (tangentially related)
+                           - <0.22 = No match (random/unrelated)
         
         Returns:
             List of photo IDs that match the query above the similarity threshold
@@ -747,27 +748,25 @@ class MLPipeline:
         # Get more candidates than k to account for filtering
         # Request 3x candidates to have enough after threshold filtering
         candidates_k = min(k * 3, 150)
-        distances, photo_ids = self.index.search("image", query_embedding, k=candidates_k)
+        scores, photo_ids = self.index.search("image", query_embedding, k=candidates_k)
         
         # Filter by similarity threshold
-        # FAISS returns L2 distances for cosine similarity normalized vectors
-        # For normalized vectors: L2_distance = sqrt(2 - 2*cosine_similarity)
-        # So: cosine_similarity = 1 - (L2_distance^2 / 2)
+        # FAISS IndexFlatIP with normalized vectors returns cosine similarity directly
+        # The "distance" returned is actually the inner product = cosine similarity
+        # Range: -1 to 1, where 1 = identical, 0 = orthogonal, -1 = opposite
         filtered_results = []
-        for distance, pid in zip(distances, photo_ids):
+        for score, pid in zip(scores, photo_ids):
             if pid < 0:
                 continue
             
-            # Convert L2 distance to cosine similarity
-            # For normalized vectors in FAISS IndexFlatIP, distance is actually 1-similarity
-            # But we're using cosine metric which gives L2 on normalized vectors
-            similarity = 1.0 - (float(distance) ** 2 / 2.0)
+            # Score IS the cosine similarity (inner product of normalized vectors)
+            similarity = float(score)
             
             if similarity >= min_similarity:
                 filtered_results.append((int(pid), similarity))
-                logging.debug(f"CLIP match: photo_id={pid}, similarity={similarity:.3f}")
+                logging.info(f"CLIP match: photo_id={pid}, similarity={similarity:.3f}")
             else:
-                logging.debug(f"CLIP filtered out: photo_id={pid}, similarity={similarity:.3f} < {min_similarity}")
+                logging.info(f"CLIP filtered out: photo_id={pid}, similarity={similarity:.3f} < {min_similarity}")
         
         # Sort by similarity (highest first) and return top k
         filtered_results.sort(key=lambda x: x[1], reverse=True)

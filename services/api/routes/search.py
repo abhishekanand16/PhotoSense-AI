@@ -83,18 +83,19 @@ async def search_photos(request: SearchRequest):
                     # Use CLIP for complex queries or when no matches found
                     # Apply similarity threshold to filter out irrelevant results
                     #
-                    # Threshold selection:
-                    # - If we have scene/object matches, use higher threshold (0.25)
-                    #   to only add highly relevant semantic matches
-                    # - If no matches found, use lower threshold (0.20)
-                    #   to be more inclusive but still filter noise
+                    # CLIP cosine similarity ranges (based on empirical testing):
+                    # - 0.30+ = Strong match (image clearly contains the query concept)
+                    # - 0.26-0.30 = Good match (likely relevant)
+                    # - 0.22-0.26 = Weak match (might be tangentially related)
+                    # - <0.22 = No match (random/unrelated images)
                     #
-                    # These thresholds were tuned to balance precision vs recall:
-                    # - 0.30+ = strong semantic match
-                    # - 0.20-0.30 = moderate match (potentially relevant)
-                    # - <0.20 = weak match (usually irrelevant)
+                    # Threshold selection:
+                    # - If we have scene/object matches, use higher threshold (0.28)
+                    #   to only add highly relevant semantic matches
+                    # - If no matches found, use moderate threshold (0.26)
+                    #   to find relevant results while filtering noise
                     
-                    min_similarity = 0.25 if candidate_ids else 0.20
+                    min_similarity = 0.28 if candidate_ids else 0.26
                     
                     photo_ids = await pipeline.search_similar_images(
                         request.query, 
