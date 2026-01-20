@@ -60,6 +60,37 @@ export interface JobStatus {
   phase?: "import" | "scanning" | "complete";
 }
 
+export interface Place {
+  name: string;
+  count: number;
+  lat: number;
+  lon: number;
+}
+
+export interface PhotoLocation {
+  photo_id: number;
+  latitude: number;
+  longitude: number;
+  city?: string;
+  region?: string;
+  country?: string;
+}
+
+export interface BoundingBox {
+  min_lat: number;
+  max_lat: number;
+  min_lon: number;
+  max_lon: number;
+}
+
+export interface LocationStats {
+  total_photos: number;
+  photos_with_location: number;
+  photos_without_location: number;
+  geocoded: number;
+  not_geocoded: number;
+}
+
 export const photosApi = {
   list: async (): Promise<Photo[]> => {
     const response = await api.get<Photo[]>("/photos");
@@ -157,5 +188,49 @@ export const healthApi = {
     } catch {
       return false;
     }
+  },
+};
+
+export const placesApi = {
+  /** Get top places with photo counts */
+  getPlaces: async (limit: number = 50): Promise<Place[]> => {
+    const response = await api.get<Place[]>("/places", { params: { limit } });
+    return response.data;
+  },
+
+  /** Get all photo locations for map display */
+  getMapLocations: async (): Promise<PhotoLocation[]> => {
+    const response = await api.get<PhotoLocation[]>("/places/map");
+    return response.data;
+  },
+
+  /** Get photos within a bounding box */
+  getPhotosByBbox: async (bbox: BoundingBox): Promise<Photo[]> => {
+    const response = await api.get<Photo[]>("/places/photos", { params: bbox });
+    return response.data;
+  },
+
+  /** Get photos by place name */
+  getPhotosByPlace: async (placeName: string): Promise<Photo[]> => {
+    const response = await api.get<Photo[]>(`/places/by-name/${encodeURIComponent(placeName)}`);
+    return response.data;
+  },
+
+  /** Get photos without location data */
+  getPhotosWithoutLocation: async (): Promise<Photo[]> => {
+    const response = await api.get<Photo[]>("/places/unknown");
+    return response.data;
+  },
+
+  /** Trigger lazy geocoding for a photo */
+  geocodePhoto: async (photoId: number): Promise<PhotoLocation> => {
+    const response = await api.post<PhotoLocation>(`/places/geocode/${photoId}`);
+    return response.data;
+  },
+
+  /** Get location statistics */
+  getStats: async (): Promise<LocationStats> => {
+    const response = await api.get<LocationStats>("/places/stats");
+    return response.data;
   },
 };

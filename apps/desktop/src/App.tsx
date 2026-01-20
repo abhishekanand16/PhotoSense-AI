@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar";
 import ObjectsView from "./views/ObjectsView";
 import PeopleView from "./views/PeopleView";
 import PhotosView from "./views/PhotosView";
+import PlacesView from "./views/PlacesView";
 import SearchView from "./views/SearchView";
 import SettingsView from "./views/SettingsView";
 import { ThemeProvider } from "./components/common/ThemeProvider";
@@ -24,6 +25,8 @@ const App: React.FC = () => {
         return <PeopleView />;
       case "objects":
         return <ObjectsView />;
+      case "places":
+        return <PlacesView />;
       case "search":
         return <SearchView />;
       case "settings":

@@ -5,11 +5,13 @@ interface CardProps {
     className?: string;
     onClick?: () => void;
     hover?: boolean;
+    id?: string;
 }
 
-const Card: React.FC<CardProps> = ({ children, className = "", onClick, hover = true }) => {
+const Card: React.FC<CardProps> = ({ children, className = "", onClick, hover = true, id }) => {
     return (
         <div
+            id={id}
             onClick={onClick}
             className={`
         bg-light-surface dark:bg-dark-surface 

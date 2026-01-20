@@ -4,6 +4,7 @@ import {
   Image,
   Users,
   Box,
+  MapPin,
   Search,
   Settings,
   ShieldCheck,
@@ -20,6 +21,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
     total_photos: number;
     total_people: number;
     total_objects: number;
+    total_locations: number;
   } | null>(null);
 
   useEffect(() => {
@@ -35,10 +37,11 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
         total_photos: data.total_photos || 0,
         total_people: data.total_people || 0,
         total_objects: data.total_objects || 0,
+        total_locations: data.total_locations || 0,
       });
     } catch (error) {
       console.error("Failed to load stats:", error);
-      setStats({ total_photos: 0, total_people: 0, total_objects: 0 });
+      setStats({ total_photos: 0, total_people: 0, total_objects: 0, total_locations: 0 });
     }
   };
 
@@ -46,6 +49,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
     { id: "photos", label: "Photos", icon: Image, count: stats?.total_photos ?? 0 },
     { id: "people", label: "People", icon: Users, count: stats?.total_people ?? 0 },
     { id: "objects", label: "Objects", icon: Box, count: stats?.total_objects ?? 0 },
+    { id: "places", label: "Places", icon: MapPin, count: stats?.total_locations ?? 0 },
     { id: "search", label: "Search", icon: Search, count: null },
     { id: "settings", label: "Settings", icon: Settings, count: null },
   ];

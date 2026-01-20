@@ -31,6 +31,8 @@ SCORE_WEIGHTS = {
     "object_match": 4.0,       # YOLO object match
     "pet_match": 4.0,          # Pet detection match
     "clip_semantic": 3.0,      # CLIP similarity score - increased importance
+    "location_exact": 8.0,     # Exact location match (e.g., "Bangalore" = "Bangalore")
+    "location_partial": 5.0,   # Partial location match (e.g., "goa" in "Goa, India")
 }
 
 
@@ -175,6 +177,75 @@ def search_by_pets(store: SQLiteStore, query: str) -> Dict[int, Dict]:
     return results
 
 
+def search_by_location(store: SQLiteStore, query: str) -> Dict[int, Dict]:
+    """
+    Search photos by location name (city, region, country).
+    
+    Matches place names like:
+    - "Bangalore" -> photos in Bangalore
+    - "Goa" -> photos in Goa
+    - "India" -> photos in India
+    - "Beach Goa" -> handled separately (scene + location combination)
+    """
+    results = {}
+    query_lower = query.lower().strip()
+    query_words = query_lower.split()
+    
+    # Search locations table
+    location_matches = store.search_locations_by_text(query)
+    
+    for match in location_matches:
+        photo_id = match["photo_id"]
+        city = (match.get("city") or "").lower()
+        region = (match.get("region") or "").lower()
+        country = (match.get("country") or "").lower()
+        
+        if photo_id not in results:
+            results[photo_id] = {
+                "location_matches": [],
+                "match_type": None,
+                "best_score": 0.0
+            }
+        
+        # Determine match quality
+        matched_field = None
+        match_type = "partial"
+        
+        # Check for exact matches first
+        for word in query_words:
+            if word == city or word == region or word == country:
+                match_type = "exact"
+                if word == city:
+                    matched_field = match.get("city")
+                elif word == region:
+                    matched_field = match.get("region")
+                else:
+                    matched_field = match.get("country")
+                break
+            elif word in city or word in region or word in country:
+                match_type = "partial"
+                if word in city:
+                    matched_field = match.get("city")
+                elif word in region:
+                    matched_field = match.get("region")
+                else:
+                    matched_field = match.get("country")
+        
+        if matched_field:
+            score = 1.0 if match_type == "exact" else 0.7
+            results[photo_id]["location_matches"].append({
+                "place": matched_field,
+                "match_type": match_type,
+                "score": score
+            })
+            
+            if score > results[photo_id]["best_score"]:
+                results[photo_id]["best_score"] = score
+                results[photo_id]["match_type"] = match_type
+    
+    return results
+
+
 async def search_by_clip(pipeline, query: str, existing_ids: Set[int]) -> Dict[int, float]:
     """
     CLIP semantic search - ALWAYS run for visual understanding.
@@ -212,15 +283,17 @@ def calculate_final_score(
     florence_data: Dict,
     object_data: Dict,
     pet_data: Dict,
-    clip_similarity: float
+    clip_similarity: float,
+    location_data: Dict = None
 ) -> float:
     """
     Calculate final relevance score combining all sources.
     
     Priority:
     1. Florence-2 exact/partial matches (highest weight)
-    2. Object/Pet detections  
-    3. CLIP semantic similarity (important for visual concepts)
+    2. Location matches (high weight for place-based searches)
+    3. Object/Pet detections  
+    4. CLIP semantic similarity (important for visual concepts)
     """
     score = 0.0
     has_tag_match = False
@@ -235,6 +308,15 @@ def calculate_final_score(
                 score += SCORE_WEIGHTS["florence_partial"] * match["confidence"]
             else:
                 score += SCORE_WEIGHTS["florence_partial"] * 0.5 * match["confidence"]
+    
+    # Location matches (HIGH WEIGHT for place-based searches)
+    if location_data and location_data.get("location_matches"):
+        has_tag_match = True
+        for match in location_data.get("location_matches", []):
+            if match["match_type"] == "exact":
+                score += SCORE_WEIGHTS["location_exact"] * match["score"]
+            else:
+                score += SCORE_WEIGHTS["location_partial"] * match["score"]
     
     # Object matches
     if object_data and object_data.get("object_matches"):
@@ -275,9 +357,10 @@ async def search_photos(request: SearchRequest):
     
     Search priority:
     1. Florence-2 rich tags (exact and partial matches)
-    2. YOLO object detections
-    3. Pet detections  
-    4. CLIP semantic similarity (fallback)
+    2. Location names (city, region, country)
+    3. YOLO object detections
+    4. Pet detections  
+    5. CLIP semantic similarity (fallback)
     """
     import logging
     
@@ -301,13 +384,19 @@ async def search_photos(request: SearchRequest):
         logging.info(f"Florence-2 matches: {len(florence_results)} photos")
         
         # ==================================================================
-        # STEP 2: Search YOLO objects
+        # STEP 2: Search by location names
+        # ==================================================================
+        location_results = search_by_location(store, query)
+        logging.info(f"Location matches: {len(location_results)} photos")
+        
+        # ==================================================================
+        # STEP 3: Search YOLO objects
         # ==================================================================
         object_results = search_by_objects(store, query)
         logging.info(f"Object matches: {len(object_results)} photos")
         
         # ==================================================================
-        # STEP 3: Search pet detections (if relevant)
+        # STEP 4: Search pet detections (if relevant)
         # ==================================================================
         pet_keywords = ["dog", "cat", "bird", "horse", "pet", "puppy", "kitten", "animal"]
         pet_results = {}
@@ -316,10 +405,15 @@ async def search_photos(request: SearchRequest):
             logging.info(f"Pet matches: {len(pet_results)} photos")
         
         # Collect all candidate photo IDs
-        candidate_ids = set(florence_results.keys()) | set(object_results.keys()) | set(pet_results.keys())
+        candidate_ids = (
+            set(florence_results.keys()) | 
+            set(location_results.keys()) |
+            set(object_results.keys()) | 
+            set(pet_results.keys())
+        )
         
         # ==================================================================
-        # STEP 4: CLIP semantic search (fallback or enhancement)
+        # STEP 5: CLIP semantic search (fallback or enhancement)
         # ==================================================================
         clip_results = await search_by_clip(pipeline, query, candidate_ids)
         logging.info(f"CLIP matches: {len(clip_results)} photos")
@@ -328,7 +422,7 @@ async def search_photos(request: SearchRequest):
         candidate_ids.update(clip_results.keys())
         
         # ==================================================================
-        # STEP 5: Calculate scores and rank
+        # STEP 6: Calculate scores and rank
         # ==================================================================
         scored_photos = []
         
@@ -338,6 +432,7 @@ async def search_photos(request: SearchRequest):
                 continue
             
             florence_data = florence_results.get(photo_id)
+            location_data = location_results.get(photo_id)
             object_data = object_results.get(photo_id)
             pet_data = pet_results.get(photo_id)
             clip_sim = clip_results.get(photo_id, 0.0)
@@ -347,7 +442,8 @@ async def search_photos(request: SearchRequest):
                 florence_data=florence_data,
                 object_data=object_data,
                 pet_data=pet_data,
-                clip_similarity=clip_sim
+                clip_similarity=clip_sim,
+                location_data=location_data
             )
             
             # Only filter out if score is effectively zero
@@ -360,6 +456,8 @@ async def search_photos(request: SearchRequest):
             matches = []
             if florence_data and florence_data.get("florence_matches"):
                 matches.append(f"florence:{len(florence_data['florence_matches'])}")
+            if location_data and location_data.get("location_matches"):
+                matches.append(f"location:{len(location_data['location_matches'])}")
             if object_data and object_data.get("object_matches"):
                 matches.append(f"objects:{len(object_data['object_matches'])}")
             if pet_data and pet_data.get("pet_matches"):

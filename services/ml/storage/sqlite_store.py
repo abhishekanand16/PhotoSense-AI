@@ -156,6 +156,21 @@ class SQLiteStore:
             )
         """)
 
+        # Locations table (store GPS and geocoded info)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS photo_locations (
+                photo_id INTEGER PRIMARY KEY,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                city TEXT,
+                region TEXT,
+                country TEXT,
+                has_location BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+            )
+        """)
+
         # =====================================================================
         # PET IDENTITY TABLES (for pet recognition & grouping similar to faces)
         # =====================================================================
@@ -270,6 +285,21 @@ class SQLiteStore:
             columns = [row[1] for row in cursor.fetchall()]
             if "pet_detection_id" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_pet_embeddings_detection ON pet_embeddings(pet_detection_id)")
+        except sqlite3.OperationalError:
+            pass
+
+        # Location-related indexes
+        try:
+            cursor.execute("PRAGMA table_info(photo_locations)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "latitude" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_locations_lat ON photo_locations(latitude)")
+            if "longitude" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_locations_lon ON photo_locations(longitude)")
+            if "city" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_locations_city ON photo_locations(city)")
+            if "country" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_locations_country ON photo_locations(country)")
         except sqlite3.OperationalError:
             pass
 
@@ -767,6 +797,12 @@ class SQLiteStore:
         stats["total_people"] = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(DISTINCT person_id) FROM faces WHERE person_id IS NOT NULL")
         stats["labeled_faces"] = cursor.fetchone()[0]
+        # Count photos with GPS location data
+        try:
+            cursor.execute("SELECT COUNT(*) FROM photo_locations WHERE has_location = 1")
+            stats["total_locations"] = cursor.fetchone()[0]
+        except Exception:
+            stats["total_locations"] = 0
         conn.close()
         return stats
     
@@ -1265,3 +1301,223 @@ class SQLiteStore:
         stats["species_counts"] = {row[0]: row[1] for row in cursor.fetchall()}
         conn.close()
         return stats
+
+    # =========================================================================
+    # LOCATION & PLACES METHODS
+    # =========================================================================
+
+    def add_location(
+        self,
+        photo_id: int,
+        latitude: float,
+        longitude: float,
+        city: Optional[str] = None,
+        region: Optional[str] = None,
+        country: Optional[str] = None,
+    ) -> None:
+        """Add or update location for a photo."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO photo_locations (photo_id, latitude, longitude, city, region, country, has_location)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            """,
+            (photo_id, latitude, longitude, city, region, country),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_location(self, photo_id: int) -> Optional[Dict]:
+        """Get location for a photo."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM photo_locations WHERE photo_id = ?", (photo_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_location_geocode(
+        self,
+        photo_id: int,
+        city: Optional[str],
+        region: Optional[str],
+        country: Optional[str],
+    ) -> None:
+        """Update geocoded info for a photo location."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE photo_locations 
+            SET city = ?, region = ?, country = ? 
+            WHERE photo_id = ?
+            """,
+            (city, region, country, photo_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_all_locations(self) -> List[Dict]:
+        """Get all photos with locations (for map clustering)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT photo_id, latitude, longitude, city, region, country 
+            FROM photo_locations 
+            WHERE has_location = 1
+            """
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_top_places(self, limit: int = 50) -> List[Dict]:
+        """Get list of top places with photo counts."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        # Group by available location hierarchy (City > Region > Country)
+        # We'll return distinct places. This is a heuristic grouping.
+        # Prioritize City, then Region, then Country.
+        cursor.execute(
+            """
+            SELECT 
+                COALESCE(city, region, country, 'Unknown') as name,
+                COUNT(*) as count,
+                AVG(latitude) as lat,
+                AVG(longitude) as lon
+            FROM photo_locations 
+            WHERE has_location = 1
+            GROUP BY COALESCE(city, region, country, 'Unknown')
+            ORDER BY count DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_photos_in_bbox(self, min_lat: float, max_lat: float, min_lon: float, max_lon: float) -> List[int]:
+        """Get photos within a bounding box."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT photo_id 
+            FROM photo_locations 
+            WHERE latitude BETWEEN ? AND ? 
+            AND longitude BETWEEN ? AND ?
+            """,
+            (min_lat, max_lat, min_lon, max_lon),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def get_photos_by_place_name(self, place_name: str) -> List[Dict]:
+        """Get photos matching a place name (city, region, or country)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Search for exact match or partial match in city, region, country
+        place_pattern = f"%{place_name}%"
+        cursor.execute(
+            """
+            SELECT p.* FROM photos p
+            INNER JOIN photo_locations pl ON p.id = pl.photo_id
+            WHERE pl.city LIKE ? OR pl.region LIKE ? OR pl.country LIKE ?
+            ORDER BY p.date_taken DESC, p.created_at DESC
+            """,
+            (place_pattern, place_pattern, place_pattern),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def search_locations_by_text(self, query: str) -> List[Dict]:
+        """Search locations table by text matching (finds photos by place name)."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Split query into words for better matching
+        words = query.lower().strip().split()
+        
+        if len(words) == 1:
+            # Single word - use LIKE for partial match
+            pattern = f"%{words[0]}%"
+            cursor.execute(
+                """
+                SELECT photo_id, city, region, country, latitude, longitude 
+                FROM photo_locations 
+                WHERE LOWER(city) LIKE ? OR LOWER(region) LIKE ? OR LOWER(country) LIKE ?
+                """,
+                (pattern, pattern, pattern)
+            )
+        else:
+            # Multiple words - match any word
+            conditions = []
+            params = []
+            for word in words:
+                pattern = f"%{word}%"
+                conditions.append("(LOWER(city) LIKE ? OR LOWER(region) LIKE ? OR LOWER(country) LIKE ?)")
+                params.extend([pattern, pattern, pattern])
+            
+            cursor.execute(
+                f"""
+                SELECT photo_id, city, region, country, latitude, longitude 
+                FROM photo_locations 
+                WHERE {' OR '.join(conditions)}
+                """,
+                params
+            )
+        
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_location_statistics(self) -> Dict:
+        """Get location-related statistics."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        stats = {}
+        
+        # Count photos with location
+        cursor.execute("SELECT COUNT(*) FROM photo_locations WHERE has_location = 1")
+        stats["total_locations"] = cursor.fetchone()[0]
+        
+        # Count geocoded locations
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM photo_locations 
+            WHERE has_location = 1 AND (city IS NOT NULL OR region IS NOT NULL OR country IS NOT NULL)
+            """
+        )
+        stats["geocoded_locations"] = cursor.fetchone()[0]
+        
+        # Count unique places (cities)
+        cursor.execute("SELECT COUNT(DISTINCT city) FROM photo_locations WHERE city IS NOT NULL")
+        stats["unique_cities"] = cursor.fetchone()[0]
+        
+        # Count unique countries
+        cursor.execute("SELECT COUNT(DISTINCT country) FROM photo_locations WHERE country IS NOT NULL")
+        stats["unique_countries"] = cursor.fetchone()[0]
+        
+        conn.close()
+        return stats
+
+    def delete_location(self, photo_id: int) -> bool:
+        """Delete location for a photo. Returns True if deleted."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM photo_locations WHERE photo_id = ?", (photo_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
