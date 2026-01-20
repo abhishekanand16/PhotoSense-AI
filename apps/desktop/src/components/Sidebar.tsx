@@ -48,7 +48,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
   const navItems = [
     { id: "photos", label: "Photos", icon: Image, count: stats?.total_photos ?? 0 },
     { id: "people", label: "People", icon: Users, count: stats?.total_people ?? 0 },
-    { id: "objects", label: "Objects", icon: Box, count: null },
     { id: "objects", label: "Objects", icon: Box, count: stats?.total_objects ?? 0 },
     { id: "places", label: "Places", icon: MapPin, count: stats?.total_locations ?? 0 },
     { id: "search", label: "Search", icon: Search, count: null },
