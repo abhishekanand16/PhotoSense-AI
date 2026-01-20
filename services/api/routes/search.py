@@ -81,8 +81,29 @@ async def search_photos(request: SearchRequest):
             if not candidate_ids or should_use_clip:
                 try:
                     # Use CLIP for complex queries or when no matches found
-                    photo_ids = await pipeline.search_similar_images(request.query, k=50)
+                    # Apply similarity threshold to filter out irrelevant results
+                    # 
+                    # Threshold selection:
+                    # - If we have scene/object matches, use higher threshold (0.25)
+                    #   to only add highly relevant semantic matches
+                    # - If no matches found, use lower threshold (0.20)
+                    #   to be more inclusive but still filter noise
+                    # 
+                    # These thresholds were tuned to balance precision vs recall:
+                    # - 0.30+ = strong semantic match
+                    # - 0.20-0.30 = moderate match (potentially relevant)
+                    # - <0.20 = weak match (usually irrelevant)
+                    
+                    min_similarity = 0.25 if candidate_ids else 0.20
+                    
+                    photo_ids = await pipeline.search_similar_images(
+                        request.query, 
+                        k=50,
+                        min_similarity=min_similarity
+                    )
                     clip_ids = set(photo_ids)
+                    
+                    logging.info(f"CLIP search for '{request.query}': {len(clip_ids)} results above threshold {min_similarity}")
                     
                     if candidate_ids:
                         # Combine with existing results (union)
