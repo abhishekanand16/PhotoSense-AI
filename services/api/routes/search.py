@@ -1,8 +1,6 @@
 """Search endpoints - Florence-2 powered semantic search with relevance tuning."""
 
-from typing import List, Dict, Set, Tuple, Optional
-from collections import defaultdict
-import re
+from typing import List, Dict, Set, Tuple
 
 from fastapi import APIRouter, HTTPException
 
@@ -37,6 +35,7 @@ SCORE_WEIGHTS = {
     "object_match": 4.0,        # YOLO object match
     "pet_match": 4.0,           # Pet detection match
     "clip_semantic": 3.0,       # CLIP similarity score - increased importance
+}
 # Source-aware scoring weights (normalized scale)
 # person/face=1.0, location=0.9, florence=0.8, object/pet=0.6, clip=0.4
 SOURCE_WEIGHTS = {
@@ -513,8 +512,7 @@ def calculate_final_score(
     pet_data: Dict,
     clip_similarity: float,
     location_data: Dict = None,
-    custom_tag_data: Dict = None
-) -> float:
+    custom_tag_data: Dict = None,
     intent_boosts: Dict[str, float] = None,
     query: str = "",
 ) -> Tuple[float, Dict]:
@@ -547,7 +545,6 @@ def calculate_final_score(
     
     # Custom user tags (HIGHEST PRIORITY)
     if custom_tag_data and custom_tag_data.get("tag_matches"):
-        has_tag_match = True
         for match in custom_tag_data.get("tag_matches", []):
             if match["match_type"] == "exact":
                 score += SCORE_WEIGHTS["custom_tag_exact"] * match["score"]
@@ -686,15 +683,6 @@ async def search_photos(request: SearchRequest):
     4. YOLO object detections
     5. Pet detections  
     6. CLIP semantic similarity (fallback)
-    Search photos using Florence-2 tags as primary source with relevance tuning.
-    
-    Search priority:
-    1. Florence-2 rich tags (exact and partial matches)
-    2. Location names (city, region, country)
-    3. YOLO object detections
-    4. Pet detections  
-    5. CLIP semantic similarity (supporting signal only)
-    
     Relevance rules:
     - Hard filter: CLIP-only results must have tag overlap with query
     - Source-aware weighted scoring with intent boosts
@@ -723,14 +711,13 @@ async def search_photos(request: SearchRequest):
         logging.info(f"Custom tag matches: {len(custom_tag_results)} photos")
         
         # ==================================================================
-        # STEP 2: Search Florence-2 tags (PRIMARY SOURCE)
         # STEP 0: Detect query intent for boosting
         # ==================================================================
         intent_boosts = detect_query_intent(query)
         logging.info(f"Intent boosts: {intent_boosts}")
         
         # ==================================================================
-        # STEP 1: Search Florence-2 tags (PRIMARY SOURCE)
+        # STEP 2: Search Florence-2 tags (PRIMARY SOURCE)
         # ==================================================================
         florence_results = search_by_florence_tags(store, query)
         logging.info(f"Florence-2 matches: {len(florence_results)} photos")
@@ -755,11 +742,8 @@ async def search_photos(request: SearchRequest):
             pet_results = search_by_pets(store, query)
             logging.info(f"Pet matches: {len(pet_results)} photos")
         
-        # Collect all candidate photo IDs
-        candidate_ids = (
-            set(custom_tag_results.keys()) |
-        # Collect all tag-based candidate photo IDs
         tag_candidate_ids = (
+            set(custom_tag_results.keys()) |
             set(florence_results.keys()) | 
             set(location_results.keys()) |
             set(object_results.keys()) | 
@@ -767,8 +751,7 @@ async def search_photos(request: SearchRequest):
         )
         
         # ==================================================================
-        # STEP 6: CLIP semantic search (fallback or enhancement)
-        # STEP 5: CLIP semantic search (supporting signal)
+        # STEP 6: CLIP semantic search (supporting signal)
         # ==================================================================
         clip_results = await search_by_clip(pipeline, query, tag_candidate_ids)
         logging.info(f"CLIP matches: {len(clip_results)} photos")
@@ -776,20 +759,6 @@ async def search_photos(request: SearchRequest):
         # ==================================================================
         # STEP 5.5: HARD FILTER - Apply tag overlap check for CLIP-only results
         # ==================================================================
-        # Collect all matched tags for overlap checking
-        def get_all_tags_for_photo(photo_id: int) -> List[str]:
-            """Collect all matched tags for a photo across all sources."""
-            tags = []
-            if photo_id in florence_results:
-                tags.extend(florence_results[photo_id].get("matched_tags", []))
-            if photo_id in location_results:
-                tags.extend(location_results[photo_id].get("matched_tags", []))
-            if photo_id in object_results:
-                tags.extend(object_results[photo_id].get("matched_tags", []))
-            if photo_id in pet_results:
-                tags.extend(pet_results[photo_id].get("matched_tags", []))
-            return tags
-        
         # Filter CLIP-only results: only keep if they have tag overlap
         clip_only_ids = set(clip_results.keys()) - tag_candidate_ids
         filtered_clip_only = 0
@@ -816,8 +785,7 @@ async def search_photos(request: SearchRequest):
         candidate_ids = tag_candidate_ids | set(clip_results.keys())
         
         # ==================================================================
-        # STEP 7: Calculate scores and rank
-        # STEP 6: Calculate scores and rank with source-aware weighting
+        # STEP 7: Calculate scores and rank with source-aware weighting
         # ==================================================================
         scored_photos = []
         
@@ -840,7 +808,7 @@ async def search_photos(request: SearchRequest):
                 pet_data=pet_data,
                 clip_similarity=clip_sim,
                 location_data=location_data,
-                custom_tag_data=custom_tag_data
+                custom_tag_data=custom_tag_data,
                 intent_boosts=intent_boosts,
                 query=query,
             )

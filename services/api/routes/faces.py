@@ -37,10 +37,6 @@ async def delete_face(face_id: int, rebuild_index: bool = False):
     Args:
         face_id: ID of the face to delete
         rebuild_index: If True, rebuild FAISS index after deletion (slower but ensures consistency)
-async def delete_face(face_id: int):
-    """
-    Delete a specific face detection.
-    Automatically cleans up the person if this was their last face (even if named).
     """
     try:
         pipeline = MLPipeline()
@@ -63,11 +59,6 @@ async def delete_face(face_id: int):
             "face_id": face_id,
             "index_rebuilt": rebuild_index,
         }
-        message = "Face deleted successfully"
-        if result.get("person_cleaned_up"):
-            message += " (person with no remaining faces was also deleted)"
-        
-        return {"status": "success", "message": message}
     except HTTPException:
         raise
     except Exception as e:
