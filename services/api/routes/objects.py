@@ -1,6 +1,5 @@
 """Object-related endpoints."""
 
-import sqlite3
 from typing import List
 
 from fastapi import APIRouter, HTTPException
@@ -128,34 +127,12 @@ async def cleanup_person_objects(dry_run: bool = False):
     store = SQLiteStore()
     
     try:
-        conn = sqlite3.connect(store.db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # Find all person objects
-        cursor.execute("""
-            SELECT id, photo_id, category, confidence 
-            FROM objects 
-            WHERE category LIKE '%person%'
-        """)
-        
-        person_objects = cursor.fetchall()
-        object_count = len(person_objects)
-        
-        # Count affected photos
-        cursor.execute("""
-            SELECT COUNT(DISTINCT photo_id) 
-            FROM objects 
-            WHERE category LIKE '%person%'
-        """)
-        affected_photos = cursor.fetchone()[0]
-        
+        like_pattern = "%person%"
+        object_count, affected_photos = store.count_objects_by_category_like(like_pattern)
+
         if not dry_run and object_count > 0:
             # Remove person objects
-            cursor.execute("DELETE FROM objects WHERE category LIKE '%person%'")
-            conn.commit()
-        
-        conn.close()
+            store.delete_objects_by_category_like(like_pattern)
         
         return {
             "status": "success",

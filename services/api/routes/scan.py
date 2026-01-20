@@ -10,6 +10,7 @@ from typing import Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from services.api.models import JobStatusResponse, ScanRequest, ScanResponse
+from services.ml.utils.path_utils import validate_folder_path as _validate_folder_path
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 
@@ -35,35 +36,6 @@ def _create_job(job_id: str, initial_state: Dict) -> None:
     """Thread-safe job creation."""
     with _jobs_lock:
         _jobs[job_id] = initial_state.copy()
-
-
-def _validate_folder_path(folder_path: str) -> Path:
-    """
-    Validate folder path for safety.
-    
-    Prevents:
-    - Path traversal attacks
-    - Non-directory paths
-    - Symlinks to sensitive locations
-    
-    Returns:
-        Resolved absolute Path object
-        
-    Raises:
-        ValueError: If path is invalid or unsafe
-    """
-    path = Path(folder_path)
-    resolved = path.resolve()
-    
-    # Must be a directory
-    if not resolved.is_dir():
-        raise ValueError(f"Path is not a directory: {folder_path}")
-    
-    # Check path doesn't contain null bytes
-    if '\x00' in str(resolved):
-        raise ValueError(f"Path contains null bytes: {folder_path}")
-    
-    return resolved
 
 
 async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
@@ -281,7 +253,6 @@ async def scan_faces_async(job_id: str):
                 photo_path = photo["file_path"]
                 
                 # Check if file exists
-                from pathlib import Path
                 if not Path(photo_path).exists():
                     logging.warning(f"Photo file not found: {photo_path}")
                     continue
