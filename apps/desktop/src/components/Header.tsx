@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { scanApi, healthApi, peopleApi } from "../services/api";
+import React, { useState, useEffect, useRef } from "react";
+import { scanApi, healthApi, peopleApi, GlobalScanStatus } from "../services/api";
 import { openFolderDialog } from "../utils/tauri";
 import { useTheme } from "./common/ThemeProvider";
 import {
@@ -10,7 +10,8 @@ import {
   Loader2,
   Settings as SettingsIcon,
   Circle,
-  RefreshCw
+  RefreshCw,
+  AlertCircle
 } from "lucide-react";
 
 interface HeaderProps {
@@ -22,23 +23,59 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
   const { theme, toggleTheme } = useTheme();
   const [searchQuery, setSearchQuery] = useState("");
-  const [processingStatus, setProcessingStatus] = useState<"idle" | "scanning">("idle");
-  const [scanProgress, setScanProgress] = useState(0);
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  
+  // Global scan status state
+  const [globalStatus, setGlobalStatus] = useState<GlobalScanStatus>({
+    status: "idle",
+    total_photos: 0,
+    scanned_photos: 0,
+    progress_percent: 100,
+    message: "Ready",
+  });
+  
+  // Track if we had an active scan recently (to avoid showing "Disconnected" during busy ML processing)
+  const lastKnownActiveStatus = useRef<GlobalScanStatus | null>(null);
+  const consecutiveFailures = useRef(0);
 
-  // Check backend connection status periodically
+  // Poll global scan status every 3 seconds
   useEffect(() => {
-    const checkConnection = async () => {
-      const connected = await healthApi.check();
-      setIsBackendConnected(connected);
+    const pollStatus = async () => {
+      try {
+        const status = await scanApi.getGlobalStatus();
+        setGlobalStatus(status);
+        setIsBackendConnected(true);
+        consecutiveFailures.current = 0;
+        
+        // Track last known active scan status
+        if (status.status === "scanning" || status.status === "indexing") {
+          lastKnownActiveStatus.current = status;
+        } else {
+          lastKnownActiveStatus.current = null;
+        }
+      } catch {
+        consecutiveFailures.current += 1;
+        
+        // If we had an active scan and this is just a temporary timeout (< 3 consecutive failures),
+        // keep showing the last known progress instead of "Disconnected"
+        if (lastKnownActiveStatus.current && consecutiveFailures.current < 3) {
+          // Keep showing the last known scanning status - backend is just busy
+          setGlobalStatus(lastKnownActiveStatus.current);
+          setIsBackendConnected(true);
+        } else {
+          // Backend is truly disconnected (multiple failures or no active scan)
+          setIsBackendConnected(false);
+          lastKnownActiveStatus.current = null;
+        }
+      }
     };
 
     // Check immediately on mount
-    checkConnection();
+    pollStatus();
 
-    // Check every 5 seconds
-    const interval = setInterval(checkConnection, 5000);
+    // Poll every 3 seconds
+    const interval = setInterval(pollStatus, 3000);
 
     return () => clearInterval(interval);
   }, []);
@@ -85,45 +122,39 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
         return;
       }
 
-      setProcessingStatus("scanning");
-      setScanProgress(0);
-
+      // Start the scan - progress will be tracked via global status polling
       const job = await scanApi.start(folderPath, true);
 
+      // Poll job status for completion/error (in addition to global status)
       const interval = setInterval(async () => {
         try {
           const status = await scanApi.getStatus(job.job_id);
-          setScanProgress(status.progress);
 
           if (status.status === "completed") {
             clearInterval(interval);
-            setProcessingStatus("idle");
-            setScanProgress(0);
-            // Reload after a short delay to show completion
+            // Refresh the app to show new photos
             setTimeout(() => {
-              window.location.reload();
+              window.dispatchEvent(new CustomEvent('refresh-photos'));
+              window.dispatchEvent(new CustomEvent('refresh-people'));
             }, 500);
           } else if (status.status === "error") {
             clearInterval(interval);
-            setProcessingStatus("idle");
-            setScanProgress(0);
             alert(`Scan failed: ${status.message || "Unknown error"}`);
           }
         } catch (error) {
           console.error("Failed to get scan status:", error);
           clearInterval(interval);
-          setProcessingStatus("idle");
-          setScanProgress(0);
           alert(`Failed to get scan status: ${error instanceof Error ? error.message : String(error)}`);
         }
-      }, 1000);
+      }, 2000);
     } catch (error) {
       console.error("Failed to start scan:", error);
-      setProcessingStatus("idle");
-      setScanProgress(0);
       alert(`Failed to start scan: ${error instanceof Error ? error.message : String(error)}\n\nMake sure the backend API is running at http://localhost:8000`);
     }
   };
+  
+  // Helper to check if scanning is in progress
+  const isScanning = globalStatus.status === "scanning" || globalStatus.status === "indexing";
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,28 +226,65 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
         </form>
 
         <div className="flex items-center gap-4">
-          {/* Status */}
-          <div className="flex items-center gap-3 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl">
-            {processingStatus === "scanning" ? (
-              <>
-                <Loader2 size={16} className="text-brand-primary animate-spin" />
-                <span className="text-xs font-bold text-light-text-secondary dark:text-dark-text-secondary">
-                  {Math.round(scanProgress * 100)}%
-                </span>
-              </>
-            ) : (
-              <>
-                <Circle 
-                  size={8} 
-                  className={isBackendConnected 
-                    ? "fill-emerald-500 text-emerald-500" 
-                    : "fill-red-500 text-red-500"
-                  } 
+          {/* Status with Progress Bar */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-3 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl min-w-[180px]">
+              {!isBackendConnected ? (
+                // Disconnected state
+                <>
+                  <Circle size={8} className="fill-red-500 text-red-500" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-red-500">
+                    Disconnected
+                  </span>
+                </>
+              ) : globalStatus.status === "scanning" || globalStatus.status === "indexing" ? (
+                // Active scan state
+                <>
+                  <Loader2 size={16} className="text-brand-primary animate-spin flex-shrink-0" />
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-bold text-brand-primary">
+                      {globalStatus.progress_percent}%
+                    </span>
+                    <span className="text-[10px] text-light-text-tertiary dark:text-dark-text-tertiary truncate">
+                      {globalStatus.scanned_photos}/{globalStatus.total_photos} photos
+                    </span>
+                  </div>
+                </>
+              ) : globalStatus.status === "paused" ? (
+                // Paused/Error state
+                <>
+                  <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
+                  <span className="text-xs font-bold text-amber-500">
+                    Scan paused
+                  </span>
+                </>
+              ) : globalStatus.total_photos === 0 ? (
+                // Empty library
+                <>
+                  <Circle size={8} className="fill-light-text-tertiary dark:fill-dark-text-tertiary text-light-text-tertiary dark:text-dark-text-tertiary" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-light-text-tertiary dark:text-dark-text-tertiary">
+                    No photos
+                  </span>
+                </>
+              ) : (
+                // Idle state with photos
+                <>
+                  <Circle size={8} className="fill-emerald-500 text-emerald-500" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-light-text-tertiary dark:text-dark-text-tertiary">
+                    Up to date
+                  </span>
+                </>
+              )}
+            </div>
+            
+            {/* Mini progress bar - only shown during active scan */}
+            {isBackendConnected && (globalStatus.status === "scanning" || globalStatus.status === "indexing") && (
+              <div className="h-1 bg-light-border dark:bg-dark-border rounded-full overflow-hidden mx-1">
+                <div 
+                  className="h-full bg-brand-primary transition-all duration-300 ease-out"
+                  style={{ width: `${globalStatus.progress_percent}%` }}
                 />
-                <span className={`text-xs font-bold uppercase tracking-wider ${isBackendConnected ? "text-light-text-tertiary dark:text-dark-text-tertiary" : "text-red-500"}`}>
-                  {isBackendConnected ? "Ready" : "Disconnected"}
-                </span>
-              </>
+              </div>
             )}
           </div>
 
@@ -226,7 +294,7 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
           <div className="flex items-center gap-2">
             <button
               onClick={handleSelectFolder}
-              disabled={processingStatus === "scanning"}
+              disabled={isScanning}
               className="flex items-center gap-2 px-4 py-2.5 bg-brand-primary text-white dark:text-black rounded-xl hover:bg-brand-secondary disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/20 font-bold text-sm"
             >
               <Plus size={18} />
