@@ -220,8 +220,7 @@ export const peopleApi = {
     faces_deleted: number;
   }> => {
     const response = await api.delete(`/people/${personId}/with-faces`);
-  delete: async (personId: number): Promise<void> => {
-    await api.delete(`/people/${personId}`);
+    return response.data;
   },
   cleanupOrphans: async (): Promise<{ deleted_people: number[]; count: number }> => {
     const response = await api.post("/people/cleanup-orphans");
