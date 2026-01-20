@@ -24,6 +24,19 @@ const PlacesView: React.FC = () => {
   // Load initial data
   useEffect(() => {
     loadData();
+    
+    // Listen for refresh events from header
+    const handleRefresh = () => {
+      loadData();
+    };
+    
+    window.addEventListener('refresh-places', handleRefresh);
+    window.addEventListener('refresh-data', handleRefresh);
+    
+    return () => {
+      window.removeEventListener('refresh-places', handleRefresh);
+      window.removeEventListener('refresh-data', handleRefresh);
+    };
   }, []);
 
   const loadData = async () => {

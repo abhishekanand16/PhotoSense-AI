@@ -17,9 +17,16 @@ router = APIRouter(prefix="/people", tags=["people"])
 
 @router.get("", response_model=List[PersonResponse])
 async def list_people():
-    """Get all people."""
+    """Get all people. Automatically cleans up orphaned people with zero faces."""
     store = SQLiteStore()
     try:
+        # Clean up orphaned people (with 0 faces) before listing
+        # This ensures the UI never shows empty placeholders
+        orphaned = store.cleanup_orphaned_people()
+        if orphaned:
+            import logging
+            logging.info(f"Cleaned up {len(orphaned)} orphaned people with no faces: {orphaned}")
+        
         people = store.get_all_people()
         # Add photo counts (unique photos, not face count)
         result = []
@@ -199,6 +206,7 @@ async def delete_person(person_id: int):
     """
     Delete a person and unassign all their faces.
     Faces remain in the database but are unassigned (person_id = NULL).
+    People can be deleted regardless of whether they have a name assigned.
     """
     store = SQLiteStore()
     try:
@@ -321,6 +329,29 @@ async def cleanup_duplicate_people(dry_run: bool = False):
             "merge_result": merge_result,
             "orphan_result": orphan_result,
             "dry_run": dry_run
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cleanup-orphans")
+async def cleanup_orphans():
+    """
+    Manually clean up orphaned people with zero faces.
+    Removes ALL people with no faces, even if they have names.
+    
+    Returns:
+        List of deleted person IDs and count
+    """
+    try:
+        store = SQLiteStore()
+        orphaned_people = store.cleanup_orphaned_people()
+        
+        return {
+            "status": "success",
+            "deleted_people": orphaned_people,
+            "count": len(orphaned_people),
+            "message": f"Cleaned up {len(orphaned_people)} orphaned people"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -15,13 +15,18 @@ router = APIRouter(prefix="/places", tags=["places"])
 @router.get("", response_model=List[PlaceResponse])
 async def get_places(limit: int = Query(50, ge=1, le=200)):
     """
-    Get top places with photo counts.
+    Get top places with photo counts. Auto-cleans orphaned locations.
     
     Returns a list of places (city/region/country) sorted by photo count.
     Places without geocoded names are excluded.
     """
     store = SQLiteStore()
     try:
+        # Clean up orphaned locations (where photo was deleted)
+        orphaned_count = store.cleanup_orphaned_locations()
+        if orphaned_count > 0:
+            logging.info(f"Cleaned up {orphaned_count} orphaned locations")
+        
         places = store.get_top_places(limit=limit)
         return [
             PlaceResponse(
@@ -41,13 +46,18 @@ async def get_places(limit: int = Query(50, ge=1, le=200)):
 @router.get("/map", response_model=List[LocationResponse])
 async def get_map_locations():
     """
-    Get all photo locations for map display.
+    Get all photo locations for map display. Auto-cleans orphaned locations.
     
     Returns coordinates for all photos that have GPS data.
     Used to populate map markers/clusters.
     """
     store = SQLiteStore()
     try:
+        # Clean up orphaned locations (where photo was deleted)
+        orphaned_count = store.cleanup_orphaned_locations()
+        if orphaned_count > 0:
+            logging.info(f"Cleaned up {orphaned_count} orphaned locations")
+        
         locations = store.get_all_locations()
         return [
             LocationResponse(
@@ -287,3 +297,24 @@ async def get_photo_location(photo_id: int) -> Optional[LocationResponse]:
         region=location.get("region"),
         country=location.get("country")
     )
+
+
+@router.post("/cleanup-orphans")
+async def cleanup_orphaned_locations():
+    """
+    Manually clean up orphaned locations that reference deleted photos.
+    
+    Returns:
+        Count of deleted locations
+    """
+    try:
+        store = SQLiteStore()
+        deleted_count = store.cleanup_orphaned_locations()
+        
+        return {
+            "status": "success",
+            "deleted_locations": deleted_count,
+            "message": f"Cleaned up {deleted_count} orphaned locations"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

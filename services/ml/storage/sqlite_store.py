@@ -805,19 +805,38 @@ class SQLiteStore:
         conn.close()
         return feedback_id
 
-    def delete_photo(self, photo_id: int) -> bool:
-        """Delete a photo and all related data (faces, objects, feedback). Returns True if deleted."""
+    def delete_photo(self, photo_id: int) -> Dict:
+        """
+        Delete a photo and all related data (faces, objects, scenes, pets, feedback).
+        
+        Returns dict with:
+        - deleted: bool - whether photo was deleted
+        - face_ids: list of deleted face IDs (for FAISS cleanup)
+        - pet_detection_ids: list of deleted pet detection IDs (for FAISS cleanup)
+        - person_ids: list of person IDs that had faces deleted (for orphan cleanup)
+        """
         conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         try:
-            # First, get all face IDs for this photo to delete related feedback
-            cursor.execute("SELECT id FROM faces WHERE photo_id = ?", (photo_id,))
-            face_ids = [row[0] for row in cursor.fetchall()]
+            # Collect face IDs and their person assignments before deletion
+            cursor.execute("SELECT id, person_id FROM faces WHERE photo_id = ?", (photo_id,))
+            face_rows = cursor.fetchall()
+            face_ids = [row[0] for row in face_rows]
+            person_ids = list(set([row[1] for row in face_rows if row[1] is not None]))
+            
+            # Collect pet detection IDs before deletion
+            cursor.execute("SELECT id FROM pet_detections WHERE photo_id = ?", (photo_id,))
+            pet_detection_ids = [row[0] for row in cursor.fetchall()]
             
             # Delete feedback for faces of this photo
             if face_ids:
                 placeholders = ','.join('?' * len(face_ids))
                 cursor.execute(f"DELETE FROM feedback WHERE face_id IN ({placeholders})", face_ids)
+            
+            # Delete embeddings for faces (has FK with ON DELETE CASCADE, but being explicit)
+            if face_ids:
+                placeholders = ','.join('?' * len(face_ids))
+                cursor.execute(f"DELETE FROM embeddings WHERE face_id IN ({placeholders})", face_ids)
             
             # Delete faces for this photo
             cursor.execute("DELETE FROM faces WHERE photo_id = ?", (photo_id,))
@@ -825,13 +844,33 @@ class SQLiteStore:
             # Delete objects for this photo
             cursor.execute("DELETE FROM objects WHERE photo_id = ?", (photo_id,))
             
+            # Delete pet embeddings (ON DELETE CASCADE should handle, but being explicit)
+            if pet_detection_ids:
+                placeholders = ','.join('?' * len(pet_detection_ids))
+                cursor.execute(f"DELETE FROM pet_embeddings WHERE pet_detection_id IN ({placeholders})", pet_detection_ids)
+            
+            # Delete pet detections (ON DELETE CASCADE from photo_id)
+            cursor.execute("DELETE FROM pet_detections WHERE photo_id = ?", (photo_id,))
+            
+            # Delete scenes (ON DELETE CASCADE from photo_id)
+            cursor.execute("DELETE FROM scenes WHERE photo_id = ?", (photo_id,))
+            
+            # Delete location (ON DELETE CASCADE from photo_id)
+            cursor.execute("DELETE FROM photo_locations WHERE photo_id = ?", (photo_id,))
+            
             # Delete the photo itself
             cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
             
             deleted = cursor.rowcount > 0
             conn.commit()
             conn.close()
-            return deleted
+            
+            return {
+                "deleted": deleted,
+                "face_ids": face_ids,
+                "pet_detection_ids": pet_detection_ids,
+                "person_ids": person_ids
+            }
         except Exception as e:
             conn.rollback()
             conn.close()
@@ -908,11 +947,22 @@ class SQLiteStore:
         
         return results
     
-    def delete_face(self, face_id: int) -> bool:
-        """Delete a face and its embedding. Returns True if deleted."""
+    def delete_face(self, face_id: int) -> Dict:
+        """
+        Delete a face and its embedding.
+        
+        Returns dict with:
+        - deleted: bool - whether face was deleted
+        - person_id: optional person ID that had this face (for orphan cleanup)
+        """
         conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         try:
+            # Get person_id before deletion
+            cursor.execute("SELECT person_id FROM faces WHERE id = ?", (face_id,))
+            row = cursor.fetchone()
+            person_id = row[0] if row and row[0] is not None else None
+            
             # Delete feedback for this face
             cursor.execute("DELETE FROM feedback WHERE face_id = ?", (face_id,))
             # Delete embedding
@@ -922,7 +972,11 @@ class SQLiteStore:
             deleted = cursor.rowcount > 0
             conn.commit()
             conn.close()
-            return deleted
+            
+            return {
+                "deleted": deleted,
+                "person_id": person_id
+            }
         except Exception as e:
             conn.rollback()
             conn.close()
@@ -1277,17 +1331,32 @@ class SQLiteStore:
             conn.close()
             raise e
 
-    def delete_pet_detection(self, pet_detection_id: int) -> bool:
-        """Delete a pet detection and its embedding. Returns True if deleted."""
+    def delete_pet_detection(self, pet_detection_id: int) -> Dict:
+        """
+        Delete a pet detection and its embedding.
+        
+        Returns dict with:
+        - deleted: bool - whether detection was deleted
+        - pet_id: optional pet ID that had this detection (for orphan cleanup)
+        """
         conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
         try:
+            # Get pet_id before deletion
+            cursor.execute("SELECT pet_id FROM pet_detections WHERE id = ?", (pet_detection_id,))
+            row = cursor.fetchone()
+            pet_id = row[0] if row and row[0] is not None else None
+            
             cursor.execute("DELETE FROM pet_embeddings WHERE pet_detection_id = ?", (pet_detection_id,))
             cursor.execute("DELETE FROM pet_detections WHERE id = ?", (pet_detection_id,))
             deleted = cursor.rowcount > 0
             conn.commit()
             conn.close()
-            return deleted
+            
+            return {
+                "deleted": deleted,
+                "pet_id": pet_id
+            }
         except Exception as e:
             conn.rollback()
             conn.close()

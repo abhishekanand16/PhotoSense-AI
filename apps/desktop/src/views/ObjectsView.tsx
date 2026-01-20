@@ -83,6 +83,19 @@ const ObjectsView: React.FC = () => {
 
   useEffect(() => {
     loadCategories();
+    
+    // Listen for refresh events from header
+    const handleRefresh = () => {
+      loadCategories();
+    };
+    
+    window.addEventListener('refresh-objects', handleRefresh);
+    window.addEventListener('refresh-data', handleRefresh);
+    
+    return () => {
+      window.removeEventListener('refresh-objects', handleRefresh);
+      window.removeEventListener('refresh-data', handleRefresh);
+    };
   }, []);
 
   useEffect(() => {

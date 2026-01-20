@@ -146,11 +146,71 @@ class FAISSIndex:
         return self._indices[embedding_type].ntotal
 
     def remove_vectors(self, embedding_type: str, entity_ids: List[int]) -> None:
-        """Remove vectors by entity IDs. Note: FAISS doesn't support removal efficiently."""
-        # FAISS doesn't support efficient removal, so we rebuild the index
+        """
+        Remove vectors by entity IDs by rebuilding the index.
+        FAISS doesn't support efficient removal, so we recreate the index without the deleted vectors.
+        
+        Args:
+            embedding_type: Type of embedding index (e.g., "face", "pet", "image")
+            entity_ids: List of entity IDs to remove
+        """
         if embedding_type not in self._indices:
             return
 
-        # This is a simplified version - in production, you'd want to track
-        # which vectors to keep and rebuild the index
-        raise NotImplementedError("Vector removal requires index rebuild")
+        if not entity_ids:
+            return
+
+        with self._write_lock:
+            index = self._indices[embedding_type]
+            id_map = self._id_maps[embedding_type]
+            
+            # Nothing to remove if index is empty
+            if index.ntotal == 0:
+                return
+            
+            # Convert entity_ids to set for fast lookup
+            entity_ids_set = set(entity_ids)
+            
+            # Collect vectors to keep (all except the ones to remove)
+            vectors_to_keep = []
+            entity_ids_to_keep = []
+            
+            for faiss_id in range(index.ntotal):
+                entity_id = id_map.get(faiss_id)
+                if entity_id is not None and entity_id not in entity_ids_set:
+                    # Reconstruct vector from FAISS
+                    vector = index.reconstruct(int(faiss_id))
+                    vectors_to_keep.append(vector)
+                    entity_ids_to_keep.append(entity_id)
+            
+            # Recreate index with same configuration
+            dimension = index.d
+            if isinstance(index, faiss.IndexFlatIP):
+                new_index = faiss.IndexFlatIP(dimension)
+                metric = "cosine"
+            else:
+                new_index = faiss.IndexFlatL2(dimension)
+                metric = "L2"
+            
+            # Add kept vectors to new index
+            if vectors_to_keep:
+                vectors_array = np.array(vectors_to_keep, dtype=np.float32)
+                
+                # Normalize for cosine similarity if needed
+                if isinstance(new_index, faiss.IndexFlatIP):
+                    faiss.normalize_L2(vectors_array)
+                
+                new_index.add(vectors_array)
+                
+                # Rebuild ID map
+                new_id_map = {}
+                for i, entity_id in enumerate(entity_ids_to_keep):
+                    new_id_map[i] = entity_id
+                
+                self._id_maps[embedding_type] = new_id_map
+            else:
+                # No vectors to keep - reset to empty map
+                self._id_maps[embedding_type] = {}
+            
+            # Replace old index with new one
+            self._indices[embedding_type] = new_index
