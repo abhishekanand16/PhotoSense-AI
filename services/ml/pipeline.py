@@ -250,14 +250,33 @@ class MLPipeline:
                 if needs_update:
                     self.store.update_photo_metadata(photo_id=photo_id, **update_data)
                 
+                # Store location if GPS coordinates are available and not already stored
+                if metadata.get("latitude") is not None and metadata.get("longitude") is not None:
+                    existing_location = self.store.get_location(photo_id)
+                    if not existing_location:
+                        self.store.add_location(
+                            photo_id=photo_id,
+                            latitude=metadata["latitude"],
+                            longitude=metadata["longitude"]
+                        )
+                
                 return {"status": "exists", "photo_id": photo_id, "updated": needs_update}
             else:
                 return {"status": "skipped", "reason": "duplicate"}
+
+        # Store location if GPS coordinates are available
+        if metadata.get("latitude") is not None and metadata.get("longitude") is not None:
+            self.store.add_location(
+                photo_id=photo_id,
+                latitude=metadata["latitude"],
+                longitude=metadata["longitude"]
+            )
 
         return {
             "status": "imported",
             "photo_id": photo_id,
             "date_taken": metadata.get("date_taken"),
+            "has_location": metadata.get("latitude") is not None,
         }
 
     async def process_photo_ml(self, photo_id: int, photo_path: str) -> Dict:

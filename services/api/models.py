@@ -121,6 +121,7 @@ class StatisticsResponse(BaseModel):
     total_objects: int
     total_people: int
     labeled_faces: int
+    total_locations: int = 0
 
 
 # =========================================================================
@@ -173,3 +174,27 @@ class SimilarPetResponse(BaseModel):
     species: str
     confidence: float
     pet_id: Optional[int] = None
+
+
+# =========================================================================
+# LOCATION/PLACES MODELS
+# =========================================================================
+
+class LocationResponse(BaseModel):
+    """Photo location response."""
+
+    photo_id: int
+    latitude: float
+    longitude: float
+    city: Optional[str] = None
+    region: Optional[str] = None
+    country: Optional[str] = None
+
+
+class PlaceResponse(BaseModel):
+    """Place with photo count response."""
+
+    name: str
+    count: int
+    lat: float
+    lon: float
