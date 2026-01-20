@@ -71,6 +71,15 @@ export interface JobStatus {
   phase?: "import" | "scanning" | "complete";
 }
 
+export interface GlobalScanStatus {
+  status: "idle" | "scanning" | "indexing" | "done" | "paused";
+  total_photos: number;
+  scanned_photos: number;
+  progress_percent: number;
+  message: string;
+  current_job_id?: string;
+}
+
 export interface Place {
   name: string;
   count: number;
@@ -235,6 +244,11 @@ export const scanApi = {
   },
   getStatus: async (jobId: string): Promise<JobStatus> => {
     const response = await api.get<JobStatus>(`/scan/status/${jobId}`);
+    return response.data;
+  },
+  /** Get global scan status for progress tracking */
+  getGlobalStatus: async (): Promise<GlobalScanStatus> => {
+    const response = await api.get<GlobalScanStatus>("/scan/status");
     return response.data;
   },
   scanFaces: async (): Promise<ScanJob> => {

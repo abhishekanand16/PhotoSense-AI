@@ -90,6 +90,17 @@ class JobStatusResponse(BaseModel):
     phase: Optional[str] = None  # "import", "scanning", or "complete"
 
 
+class GlobalScanStatusResponse(BaseModel):
+    """Global scan status for progress tracking."""
+
+    status: str  # idle | scanning | indexing | done | paused
+    total_photos: int
+    scanned_photos: int
+    progress_percent: int  # 0-100
+    message: str
+    current_job_id: Optional[str] = None
+
+
 class UpdatePersonRequest(BaseModel):
     """Request to update person name."""
 
