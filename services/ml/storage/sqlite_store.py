@@ -673,6 +673,36 @@ class SQLiteStore:
         conn.close()
         return [row[0] for row in rows]
 
+    def get_scene_label_stats(self, prefix: Optional[str] = None) -> List[Dict]:
+        """Get scene label stats with photo counts and average confidence."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        params = []
+        query = """
+            SELECT scene_label,
+                   COUNT(DISTINCT photo_id) AS photo_count,
+                   AVG(confidence) AS avg_confidence
+            FROM scenes
+        """
+
+        if prefix:
+            query += " WHERE scene_label LIKE ?"
+            params.append(f"{prefix}%")
+
+        query += " GROUP BY scene_label ORDER BY photo_count DESC, scene_label"
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "label": row[0],
+                "photo_count": row[1],
+                "avg_confidence": float(row[2] or 0.0),
+            }
+            for row in rows
+        ]
+
     def delete_scenes_for_photo(self, photo_id: int) -> None:
         """Delete all scenes for a photo (e.g., before re-detecting)."""
         conn = sqlite3.connect(self.db_path, timeout=30)
