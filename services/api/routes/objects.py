@@ -37,9 +37,15 @@ async def list_categories():
 
 @router.get("/categories/summary", response_model=List[CategorySummaryResponse])
 async def list_categories_summary():
-    """Get object categories with photo counts (excluding 'person' and 'other')."""
+    """Get object categories with photo counts (excluding 'person' and 'other'). Auto-cleans orphaned objects."""
     store = SQLiteStore()
     try:
+        # Clean up orphaned objects (where photo was deleted)
+        orphaned_count = store.cleanup_orphaned_objects()
+        if orphaned_count > 0:
+            import logging
+            logging.info(f"Cleaned up {orphaned_count} orphaned objects")
+        
         photos = store.get_all_photos()
         category_photos = {}
         for photo in photos:
@@ -160,5 +166,26 @@ async def cleanup_person_objects(dry_run: bool = False):
             "message": f"{'Would remove' if dry_run else 'Removed'} {object_count} person objects from {affected_photos} photos"
         }
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cleanup-orphans")
+async def cleanup_orphaned_objects():
+    """
+    Manually clean up orphaned objects that reference deleted photos.
+    
+    Returns:
+        Count of deleted objects
+    """
+    try:
+        store = SQLiteStore()
+        deleted_count = store.cleanup_orphaned_objects()
+        
+        return {
+            "status": "success",
+            "deleted_objects": deleted_count,
+            "message": f"Cleaned up {deleted_count} orphaned objects"
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

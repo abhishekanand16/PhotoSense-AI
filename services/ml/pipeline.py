@@ -884,20 +884,42 @@ class MLPipeline:
     async def delete_face(self, face_id: int) -> Dict:
         """
         Delete a face from database and FAISS index.
-        Note: FAISS doesn't support efficient removal, so we mark as deleted
-        and rebuild index periodically.
+        Includes transactional safety and automatic cleanup of orphaned people.
         """
-        # Delete from database (includes embedding)
-        deleted = self.store.delete_face(face_id)
+        import logging
         
-        if not deleted:
+        # TRANSACTIONAL SAFETY: Delete from DB first, then FAISS
+        # Step 1: Delete from database and get person_id for orphan cleanup
+        deletion_result = self.store.delete_face(face_id)
+        
+        if not deletion_result["deleted"]:
             return {"status": "not_found"}
         
-        # For FAISS, we'd need to rebuild the index
-        # In production, track deletions and rebuild periodically
-        # For now, just mark as deleted in DB
+        # Step 2: Remove embedding from FAISS index
+        try:
+            self.index.load_index("face")
+            self.index.remove_vectors("face", [face_id])
+            self.index.save_index("face")
+            logging.info(f"Removed face {face_id} from FAISS index")
+        except Exception as e:
+            logging.error(f"Failed to remove face {face_id} from FAISS: {str(e)}")
+            # Continue - FAISS can be rebuilt later if needed
         
-        return {"status": "deleted", "face_id": face_id}
+        # Step 3: Clean up orphaned person if this was their last face
+        orphaned_people = []
+        if deletion_result["person_id"]:
+            try:
+                orphaned_people = self.store.cleanup_orphaned_people()
+                if orphaned_people:
+                    logging.info(f"Cleaned up {len(orphaned_people)} orphaned people: {orphaned_people}")
+            except Exception as e:
+                logging.error(f"Failed to clean up orphaned people: {str(e)}")
+        
+        return {
+            "status": "deleted", 
+            "face_id": face_id,
+            "person_cleaned_up": deletion_result["person_id"] in orphaned_people if deletion_result["person_id"] else False
+        }
     
     async def should_auto_recluster(self) -> bool:
         """

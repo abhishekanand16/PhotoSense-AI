@@ -1,7 +1,8 @@
-"""Search endpoints - Florence-2 powered semantic search."""
+"""Search endpoints - Florence-2 powered semantic search with relevance tuning."""
 
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
+import re
 
 from fastapi import APIRouter, HTTPException
 
@@ -14,26 +15,176 @@ router = APIRouter(prefix="/search", tags=["search"])
 # SEARCH CONFIGURATION
 # ==============================================================================
 
-# Minimum confidence thresholds (lowered for better recall)
+# Minimum confidence thresholds per source (stricter for precision)
 MIN_CONFIDENCE = {
-    "florence_tag": 0.30,    # Florence-2 generated tags - lowered to catch more
-    "scene_tag": 0.20,       # Places365/CLIP scene tags  
-    "object": 0.40,          # YOLO objects
-    "pet": 0.35,             # Pet detections
-    "clip_similarity": 0.20, # CLIP semantic search - lowered for fallback
+    "florence_tag": 0.35,    # Florence-2 generated tags
+    "scene_tag": 0.25,       # Places365/CLIP scene tags
+    "object": 0.50,          # YOLO objects - stricter
+    "pet": 0.45,             # Pet detections - stricter
+    "clip_similarity": 0.25, # CLIP semantic search - only when tag overlap exists
 }
 
-# Scoring weights (Florence-2 is primary source)
-SCORE_WEIGHTS = {
-    "florence_exact": 10.0,    # Exact Florence-2 tag match (e.g., "moon" = "moon")
-    "florence_partial": 6.0,   # Partial match (e.g., "moon" in "crescent moon")
-    "scene_exact": 4.0,        # Exact scene tag match
-    "object_match": 4.0,       # YOLO object match
-    "pet_match": 4.0,          # Pet detection match
-    "clip_semantic": 3.0,      # CLIP similarity score - increased importance
-    "location_exact": 8.0,     # Exact location match (e.g., "Bangalore" = "Bangalore")
-    "location_partial": 5.0,   # Partial location match (e.g., "goa" in "Goa, India")
+# Source-aware scoring weights (normalized scale)
+# person/face=1.0, location=0.9, florence=0.8, object/pet=0.6, clip=0.4
+SOURCE_WEIGHTS = {
+    "person": 1.0,       # Person/face match (highest priority)
+    "location": 0.9,     # Location match
+    "florence": 0.8,     # Florence-2 scene tags
+    "object": 0.6,       # YOLO object detection
+    "pet": 0.6,          # Pet detection
+    "clip": 0.4,         # CLIP similarity (supporting only)
 }
+
+# Match type multipliers (exact > partial > fuzzy)
+MATCH_TYPE_MULTIPLIERS = {
+    "exact": 1.0,
+    "partial": 0.75,
+    "word": 0.5,
+    "fuzzy": 0.25,
+}
+
+# Generic tags to suppress (should never cause top-ranked result alone)
+GENERIC_TAGS = {
+    "photo", "image", "picture", "person", "people", "outdoor", "outdoors",
+    "object", "thing", "nature", "scene", "view", "background", "foreground",
+    "day", "daytime", "area", "place", "shot", "snapshot",
+}
+
+# Scene/visual keywords for intent detection
+SCENE_KEYWORDS = {
+    "sunset", "sunrise", "beach", "mountain", "forest", "ocean", "sea", "lake",
+    "river", "sky", "cloud", "clouds", "snow", "rain", "night", "evening",
+    "morning", "tree", "trees", "flower", "flowers", "garden", "park", "city",
+    "street", "building", "architecture", "landscape", "waterfall", "desert",
+    "moon", "stars", "rainbow", "aurora",
+}
+
+# Object keywords for intent detection
+OBJECT_KEYWORDS = {
+    "car", "bicycle", "bike", "motorcycle", "bus", "truck", "boat", "plane",
+    "chair", "table", "laptop", "phone", "computer", "tv", "television",
+    "book", "bottle", "cup", "glass", "bag", "umbrella", "clock", "vase",
+}
+
+# Pet/animal keywords for intent detection
+PET_KEYWORDS = {
+    "dog", "cat", "bird", "horse", "puppy", "kitten", "pet", "animal",
+    "dogs", "cats", "birds", "horses", "puppies", "kittens", "pets", "animals",
+}
+
+# Location indicator patterns (simple heuristics)
+LOCATION_INDICATORS = {
+    "in", "at", "from", "near", "around",
+}
+
+
+# ==============================================================================
+# INTENT DETECTION (Lightweight, keyword-based)
+# ==============================================================================
+
+def detect_query_intent(query: str) -> Dict[str, float]:
+    """
+    Detect query intent using simple keyword rules.
+    Returns boost multipliers for each source type.
+    
+    Intent types:
+    - person: boost face/person matches
+    - location: boost location matches  
+    - scene: boost Florence scene tags
+    - object: boost YOLO object matches
+    - pet: boost pet detections
+    """
+    query_lower = query.lower().strip()
+    query_words = set(query_lower.split())
+    
+    boosts = {
+        "person": 1.0,
+        "location": 1.0,
+        "florence": 1.0,
+        "object": 1.0,
+        "pet": 1.0,
+        "clip": 1.0,
+    }
+    
+    # Check for person name pattern (capitalized word not in common keywords)
+    # Simple heuristic: if query has capitalized words that aren't scene/object keywords
+    words = query.split()
+    potential_names = [w for w in words if w[0].isupper() and w.lower() not in SCENE_KEYWORDS 
+                       and w.lower() not in OBJECT_KEYWORDS and w.lower() not in PET_KEYWORDS
+                       and w.lower() not in LOCATION_INDICATORS and len(w) > 1]
+    if potential_names:
+        boosts["person"] = 1.5  # Boost person/face matches
+    
+    # Check for location indicators (words like "in", "at", "from" followed by capitalized word)
+    if any(ind in query_lower for ind in LOCATION_INDICATORS):
+        boosts["location"] = 1.3
+    
+    # Check for scene keywords
+    scene_matches = query_words & SCENE_KEYWORDS
+    if scene_matches:
+        boosts["florence"] = 1.3
+        boosts["clip"] = 1.2  # CLIP good for visual scenes
+    
+    # Check for object keywords
+    object_matches = query_words & OBJECT_KEYWORDS
+    if object_matches:
+        boosts["object"] = 1.3
+    
+    # Check for pet keywords
+    pet_matches = query_words & PET_KEYWORDS
+    if pet_matches:
+        boosts["pet"] = 1.4
+        boosts["object"] = 0.8  # Reduce object boost when looking for pets
+    
+    return boosts
+
+
+def has_tag_overlap(query: str, tags: List[str]) -> bool:
+    """
+    Check if query has meaningful word overlap with any tags.
+    Used to filter CLIP-only results without tag relevance.
+    """
+    if not tags:
+        return False
+    
+    query_lower = query.lower().strip()
+    query_words = set(query_lower.split())
+    
+    # Remove generic words from query for overlap check
+    meaningful_query_words = query_words - GENERIC_TAGS - LOCATION_INDICATORS
+    if not meaningful_query_words:
+        meaningful_query_words = query_words  # Fall back to all words
+    
+    for tag in tags:
+        tag_lower = tag.lower()
+        tag_words = set(tag_lower.split())
+        
+        # Check for word overlap
+        if meaningful_query_words & tag_words:
+            return True
+        
+        # Check if any query word is substring of tag
+        for qw in meaningful_query_words:
+            if len(qw) >= 3 and qw in tag_lower:
+                return True
+    
+    return False
+
+
+def is_generic_only_match(matched_tags: List[str]) -> bool:
+    """
+    Check if all matched tags are generic (should be down-ranked).
+    """
+    if not matched_tags:
+        return False
+    
+    for tag in matched_tags:
+        tag_words = set(tag.lower().split())
+        # If any word in the tag is NOT generic, it's not a generic-only match
+        if tag_words - GENERIC_TAGS:
+            return False
+    
+    return True
 
 
 def search_by_florence_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
@@ -45,17 +196,16 @@ def search_by_florence_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
     - "golden sunset reflecting on water"
     - "person walking on beach"
     
-    This searches those tags directly.
+    This searches those tags directly with confidence threshold pruning.
     """
     results = {}
     query_lower = query.lower().strip()
-    query_words = query_lower.split()
+    query_words = set(query_lower.split())
     
     # Search scenes table (contains Florence-2 tags)
-    # Use very low threshold - we'll score by confidence later
     scene_matches = store.search_scenes_by_text(
         query, 
-        min_confidence=0.1  # Get all matches, score later
+        min_confidence=0.1  # Get all matches, filter by threshold below
     )
     
     for match in scene_matches:
@@ -63,36 +213,38 @@ def search_by_florence_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
         tag = match["scene_label"].lower()
         confidence = match["confidence"]
         
+        # Apply confidence threshold pruning
+        if confidence < MIN_CONFIDENCE["florence_tag"]:
+            continue
+        
         if photo_id not in results:
             results[photo_id] = {
                 "florence_matches": [],
+                "matched_tags": [],  # For tag overlap checking
                 "match_type": None,
-                "best_confidence": 0.0
+                "best_confidence": 0.0,
+                "has_exact_match": False,
             }
         
         # Determine match quality
         if query_lower == tag:
-            # Exact match: "moon" == "moon"
             match_type = "exact"
-            score_multiplier = 1.0
         elif query_lower in tag:
-            # Query is substring: "moon" in "crescent moon"
             match_type = "partial"
-            score_multiplier = 0.9
-        elif any(word in tag for word in query_words):
-            # Word match: "sunset" in "beautiful sunset over ocean"
+        elif query_words & set(tag.split()):
             match_type = "word"
-            score_multiplier = 0.7
         else:
             match_type = "fuzzy"
-            score_multiplier = 0.5
         
         results[photo_id]["florence_matches"].append({
             "tag": match["scene_label"],
             "confidence": confidence,
             "match_type": match_type,
-            "score": confidence * score_multiplier
         })
+        results[photo_id]["matched_tags"].append(match["scene_label"])
+        
+        if match_type == "exact":
+            results[photo_id]["has_exact_match"] = True
         
         if confidence > results[photo_id]["best_confidence"]:
             results[photo_id]["best_confidence"] = confidence
@@ -102,7 +254,7 @@ def search_by_florence_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
 
 
 def search_by_objects(store: SQLiteStore, query: str) -> Dict[int, Dict]:
-    """Search YOLO detected objects."""
+    """Search YOLO detected objects with confidence threshold pruning."""
     results = {}
     query_lower = query.lower().strip()
     
@@ -110,20 +262,23 @@ def search_by_objects(store: SQLiteStore, query: str) -> Dict[int, Dict]:
     objects = store.get_objects_by_pattern(query_lower)
     
     for obj in objects:
-        if obj["confidence"] < 0.3:  # Lower threshold, score later
+        # Apply stricter confidence threshold
+        if obj["confidence"] < MIN_CONFIDENCE["object"]:
             continue
             
         photo_id = obj["photo_id"]
         if photo_id not in results:
             results[photo_id] = {
                 "object_matches": [],
-                "best_confidence": 0.0
+                "matched_tags": [],  # For tag overlap checking
+                "best_confidence": 0.0,
             }
         
         results[photo_id]["object_matches"].append({
             "category": obj["category"],
-            "confidence": obj["confidence"]
+            "confidence": obj["confidence"],
         })
+        results[photo_id]["matched_tags"].append(obj["category"])
         
         if obj["confidence"] > results[photo_id]["best_confidence"]:
             results[photo_id]["best_confidence"] = obj["confidence"]
@@ -132,7 +287,7 @@ def search_by_objects(store: SQLiteStore, query: str) -> Dict[int, Dict]:
 
 
 def search_by_pets(store: SQLiteStore, query: str) -> Dict[int, Dict]:
-    """Search pet detections."""
+    """Search pet detections with confidence threshold pruning."""
     results = {}
     query_lower = query.lower().strip()
     
@@ -156,20 +311,23 @@ def search_by_pets(store: SQLiteStore, query: str) -> Dict[int, Dict]:
     for species in species_to_search:
         detections = store.get_pet_detections_by_species(species)
         for det in detections:
-            if det["confidence"] < 0.3:  # Lower threshold
+            # Apply stricter confidence threshold
+            if det["confidence"] < MIN_CONFIDENCE["pet"]:
                 continue
                 
             photo_id = det["photo_id"]
             if photo_id not in results:
                 results[photo_id] = {
                     "pet_matches": [],
-                    "best_confidence": 0.0
+                    "matched_tags": [],  # For tag overlap checking
+                    "best_confidence": 0.0,
                 }
             
             results[photo_id]["pet_matches"].append({
                 "species": det["species"],
-                "confidence": det["confidence"]
+                "confidence": det["confidence"],
             })
+            results[photo_id]["matched_tags"].append(det["species"])
             
             if det["confidence"] > results[photo_id]["best_confidence"]:
                 results[photo_id]["best_confidence"] = det["confidence"]
@@ -203,8 +361,10 @@ def search_by_location(store: SQLiteStore, query: str) -> Dict[int, Dict]:
         if photo_id not in results:
             results[photo_id] = {
                 "location_matches": [],
+                "matched_tags": [],  # For tag overlap checking
                 "match_type": None,
-                "best_score": 0.0
+                "best_score": 0.0,
+                "has_exact_match": False,
             }
         
         # Determine match quality
@@ -236,8 +396,12 @@ def search_by_location(store: SQLiteStore, query: str) -> Dict[int, Dict]:
             results[photo_id]["location_matches"].append({
                 "place": matched_field,
                 "match_type": match_type,
-                "score": score
+                "score": score,
             })
+            results[photo_id]["matched_tags"].append(matched_field)
+            
+            if match_type == "exact":
+                results[photo_id]["has_exact_match"] = True
             
             if score > results[photo_id]["best_score"]:
                 results[photo_id]["best_score"] = score
@@ -248,22 +412,24 @@ def search_by_location(store: SQLiteStore, query: str) -> Dict[int, Dict]:
 
 async def search_by_clip(pipeline, query: str, existing_ids: Set[int]) -> Dict[int, float]:
     """
-    CLIP semantic search - ALWAYS run for visual understanding.
+    CLIP semantic search - supporting signal only.
     
     CLIP understands visual concepts that tags might miss:
     - "moon" - understands round bright object in night sky
     - "sunset" - understands orange/red sky colors
     - "beach" - understands sand + water combination
+    
+    NOTE: CLIP-only results are filtered unless they have tag overlap with query.
     """
     results = {}
     
-    # Always use lower threshold - CLIP is important for visual queries
-    min_sim = 0.18 if not existing_ids else MIN_CONFIDENCE["clip_similarity"]
+    # Use consistent threshold
+    min_sim = MIN_CONFIDENCE["clip_similarity"]
     
     try:
         clip_results = await pipeline.search_similar_images(
             query,
-            k=50,  # Get more results
+            k=50,
             min_similarity=min_sim,
             return_scores=True
         )
@@ -284,83 +450,167 @@ def calculate_final_score(
     object_data: Dict,
     pet_data: Dict,
     clip_similarity: float,
-    location_data: Dict = None
-) -> float:
+    location_data: Dict = None,
+    intent_boosts: Dict[str, float] = None,
+    query: str = "",
+) -> Tuple[float, Dict]:
     """
-    Calculate final relevance score combining all sources.
+    Calculate final relevance score using source-aware weighted scoring.
     
-    Priority:
-    1. Florence-2 exact/partial matches (highest weight)
-    2. Location matches (high weight for place-based searches)
-    3. Object/Pet detections  
-    4. CLIP semantic similarity (important for visual concepts)
+    Scoring rules:
+    1. Exact tag match > semantic similarity
+    2. Multi-signal match > single-signal match
+    3. Penalize results matching via ONE weak signal only
+    4. Apply intent boosts based on query type
+    
+    Returns:
+        Tuple of (score, match_info dict for debugging)
     """
+    if intent_boosts is None:
+        intent_boosts = {k: 1.0 for k in SOURCE_WEIGHTS}
+    
     score = 0.0
-    has_tag_match = False
+    source_scores = {}  # Track per-source contributions
+    matched_sources = []  # Track which sources matched
+    all_matched_tags = []  # Collect all matched tags for generic check
+    has_exact_match = False
     
-    # Florence-2 tag matches (PRIMARY)
+    # ==================================================================
+    # Florence-2 tag matches (weight: 0.8)
+    # ==================================================================
     if florence_data and florence_data.get("florence_matches"):
-        has_tag_match = True
+        florence_score = 0.0
         for match in florence_data.get("florence_matches", []):
-            if match["match_type"] == "exact":
-                score += SCORE_WEIGHTS["florence_exact"] * match["confidence"]
-            elif match["match_type"] == "partial":
-                score += SCORE_WEIGHTS["florence_partial"] * match["confidence"]
-            else:
-                score += SCORE_WEIGHTS["florence_partial"] * 0.5 * match["confidence"]
+            multiplier = MATCH_TYPE_MULTIPLIERS.get(match["match_type"], 0.25)
+            florence_score += match["confidence"] * multiplier
+        
+        # Apply source weight and intent boost
+        florence_score *= SOURCE_WEIGHTS["florence"] * intent_boosts.get("florence", 1.0)
+        source_scores["florence"] = florence_score
+        matched_sources.append("florence")
+        all_matched_tags.extend(florence_data.get("matched_tags", []))
+        
+        if florence_data.get("has_exact_match"):
+            has_exact_match = True
     
-    # Location matches (HIGH WEIGHT for place-based searches)
+    # ==================================================================
+    # Location matches (weight: 0.9)
+    # ==================================================================
     if location_data and location_data.get("location_matches"):
-        has_tag_match = True
+        location_score = 0.0
         for match in location_data.get("location_matches", []):
-            if match["match_type"] == "exact":
-                score += SCORE_WEIGHTS["location_exact"] * match["score"]
-            else:
-                score += SCORE_WEIGHTS["location_partial"] * match["score"]
+            multiplier = MATCH_TYPE_MULTIPLIERS.get(match["match_type"], 0.25)
+            location_score += match["score"] * multiplier
+        
+        # Apply source weight and intent boost
+        location_score *= SOURCE_WEIGHTS["location"] * intent_boosts.get("location", 1.0)
+        source_scores["location"] = location_score
+        matched_sources.append("location")
+        all_matched_tags.extend(location_data.get("matched_tags", []))
+        
+        if location_data.get("has_exact_match"):
+            has_exact_match = True
     
-    # Object matches
+    # ==================================================================
+    # Object matches (weight: 0.6)
+    # ==================================================================
     if object_data and object_data.get("object_matches"):
-        has_tag_match = True
+        object_score = 0.0
         for match in object_data.get("object_matches", []):
-            score += SCORE_WEIGHTS["object_match"] * match["confidence"]
+            object_score += match["confidence"]
+        
+        # Apply source weight and intent boost
+        object_score *= SOURCE_WEIGHTS["object"] * intent_boosts.get("object", 1.0)
+        source_scores["object"] = object_score
+        matched_sources.append("object")
+        all_matched_tags.extend(object_data.get("matched_tags", []))
     
-    # Pet matches
+    # ==================================================================
+    # Pet matches (weight: 0.6)
+    # ==================================================================
     if pet_data and pet_data.get("pet_matches"):
-        has_tag_match = True
+        pet_score = 0.0
         for match in pet_data.get("pet_matches", []):
-            score += SCORE_WEIGHTS["pet_match"] * match["confidence"]
+            pet_score += match["confidence"]
+        
+        # Apply source weight and intent boost
+        pet_score *= SOURCE_WEIGHTS["pet"] * intent_boosts.get("pet", 1.0)
+        source_scores["pet"] = pet_score
+        matched_sources.append("pet")
+        all_matched_tags.extend(pet_data.get("matched_tags", []))
     
-    # CLIP semantic similarity - IMPORTANT for visual queries
+    # ==================================================================
+    # CLIP similarity (weight: 0.4 - supporting only)
+    # ==================================================================
     if clip_similarity > 0:
-        # Scale CLIP score (similarity is 0-1, we want meaningful contribution)
-        clip_score = SCORE_WEIGHTS["clip_semantic"] * clip_similarity * 5.0
-        
-        # Bonus if CLIP confirms tag match
-        if has_tag_match:
-            clip_score *= 1.5  # Confirmation bonus
-        
-        score += clip_score
+        clip_score = clip_similarity * SOURCE_WEIGHTS["clip"] * intent_boosts.get("clip", 1.0)
+        source_scores["clip"] = clip_score
+        matched_sources.append("clip")
     
-    # CLIP-only results are still valid (just lower ranked)
-    # Don't penalize too harshly - CLIP understands visual concepts
-    if not has_tag_match and clip_similarity > 0:
-        # Pure CLIP match - still valid but less confident
-        score = clip_similarity * SCORE_WEIGHTS["clip_semantic"] * 3.0
+    # ==================================================================
+    # Combine scores with bonuses and penalties
+    # ==================================================================
     
-    return score
+    # Base score: weighted sum of all sources
+    score = sum(source_scores.values())
+    
+    # BONUS: Multi-signal match (more than one source agrees)
+    num_tag_sources = len([s for s in matched_sources if s != "clip"])
+    if num_tag_sources >= 2:
+        score *= 1.3  # 30% bonus for multi-signal agreement
+    elif num_tag_sources >= 3:
+        score *= 1.5  # 50% bonus for 3+ sources
+    
+    # BONUS: Exact tag match
+    if has_exact_match:
+        score *= 1.2  # 20% bonus for exact match
+    
+    # BONUS: CLIP confirms tag match (cross-validation)
+    if "clip" in matched_sources and num_tag_sources > 0:
+        score *= 1.1  # 10% bonus for CLIP confirmation
+    
+    # PENALTY: Single weak signal only
+    if len(matched_sources) == 1:
+        single_source = matched_sources[0]
+        if single_source == "clip":
+            # CLIP-only match - heavily penalized
+            score *= 0.3
+        elif single_source in ["object", "pet"]:
+            # Single object/pet match - moderately penalized
+            score *= 0.6
+    
+    # PENALTY: Generic tag only match
+    if all_matched_tags and is_generic_only_match(all_matched_tags):
+        score *= 0.4  # 60% penalty for generic-only matches
+    
+    match_info = {
+        "sources": matched_sources,
+        "source_scores": source_scores,
+        "has_exact_match": has_exact_match,
+        "num_tag_sources": num_tag_sources,
+        "is_generic_only": is_generic_only_match(all_matched_tags) if all_matched_tags else False,
+    }
+    
+    return score, match_info
 
 
 @router.post("", response_model=List[PhotoResponse])
 async def search_photos(request: SearchRequest):
     """
-    Search photos using Florence-2 tags as primary source.
+    Search photos using Florence-2 tags as primary source with relevance tuning.
     
     Search priority:
     1. Florence-2 rich tags (exact and partial matches)
     2. Location names (city, region, country)
     3. YOLO object detections
     4. Pet detections  
-    5. CLIP semantic similarity (fallback)
+    5. CLIP semantic similarity (supporting signal only)
+    
+    Relevance rules:
+    - Hard filter: CLIP-only results must have tag overlap with query
+    - Source-aware weighted scoring with intent boosts
+    - Multi-signal matches ranked higher than single-signal
+    - Generic tags suppressed
     """
     import logging
     
@@ -376,6 +626,12 @@ async def search_photos(request: SearchRequest):
 
         query = request.query.strip()
         logging.info(f"Search query: '{query}'")
+        
+        # ==================================================================
+        # STEP 0: Detect query intent for boosting
+        # ==================================================================
+        intent_boosts = detect_query_intent(query)
+        logging.info(f"Intent boosts: {intent_boosts}")
         
         # ==================================================================
         # STEP 1: Search Florence-2 tags (PRIMARY SOURCE)
@@ -398,14 +654,13 @@ async def search_photos(request: SearchRequest):
         # ==================================================================
         # STEP 4: Search pet detections (if relevant)
         # ==================================================================
-        pet_keywords = ["dog", "cat", "bird", "horse", "pet", "puppy", "kitten", "animal"]
         pet_results = {}
-        if any(kw in query.lower() for kw in pet_keywords):
+        if any(kw in query.lower() for kw in PET_KEYWORDS):
             pet_results = search_by_pets(store, query)
             logging.info(f"Pet matches: {len(pet_results)} photos")
         
-        # Collect all candidate photo IDs
-        candidate_ids = (
+        # Collect all tag-based candidate photo IDs
+        tag_candidate_ids = (
             set(florence_results.keys()) | 
             set(location_results.keys()) |
             set(object_results.keys()) | 
@@ -413,16 +668,55 @@ async def search_photos(request: SearchRequest):
         )
         
         # ==================================================================
-        # STEP 5: CLIP semantic search (fallback or enhancement)
+        # STEP 5: CLIP semantic search (supporting signal)
         # ==================================================================
-        clip_results = await search_by_clip(pipeline, query, candidate_ids)
+        clip_results = await search_by_clip(pipeline, query, tag_candidate_ids)
         logging.info(f"CLIP matches: {len(clip_results)} photos")
         
-        # Add CLIP-only results to candidates
-        candidate_ids.update(clip_results.keys())
+        # ==================================================================
+        # STEP 5.5: HARD FILTER - Apply tag overlap check for CLIP-only results
+        # ==================================================================
+        # Collect all matched tags for overlap checking
+        def get_all_tags_for_photo(photo_id: int) -> List[str]:
+            """Collect all matched tags for a photo across all sources."""
+            tags = []
+            if photo_id in florence_results:
+                tags.extend(florence_results[photo_id].get("matched_tags", []))
+            if photo_id in location_results:
+                tags.extend(location_results[photo_id].get("matched_tags", []))
+            if photo_id in object_results:
+                tags.extend(object_results[photo_id].get("matched_tags", []))
+            if photo_id in pet_results:
+                tags.extend(pet_results[photo_id].get("matched_tags", []))
+            return tags
+        
+        # Filter CLIP-only results: only keep if they have tag overlap
+        clip_only_ids = set(clip_results.keys()) - tag_candidate_ids
+        filtered_clip_only = 0
+        
+        for clip_id in list(clip_only_ids):
+            # For CLIP-only results, check if CLIP similarity is high enough
+            # and the photo has ANY tags that overlap with query
+            # Since these photos have no tag matches, we need to be strict
+            clip_sim = clip_results[clip_id]
+            
+            # Get photo's existing tags from DB for overlap check
+            # (This is a stricter check - CLIP-only must still have some relevance)
+            photo_scenes = store.get_scenes_for_photo(clip_id) if hasattr(store, 'get_scenes_for_photo') else []
+            photo_tags = [s.get("scene_label", "") for s in photo_scenes] if photo_scenes else []
+            
+            # If no tag overlap and CLIP similarity is not exceptionally high, filter out
+            if not has_tag_overlap(query, photo_tags) and clip_sim < 0.35:
+                del clip_results[clip_id]
+                filtered_clip_only += 1
+        
+        logging.info(f"Filtered {filtered_clip_only} CLIP-only results without tag overlap")
+        
+        # Final candidate set
+        candidate_ids = tag_candidate_ids | set(clip_results.keys())
         
         # ==================================================================
-        # STEP 6: Calculate scores and rank
+        # STEP 6: Calculate scores and rank with source-aware weighting
         # ==================================================================
         scored_photos = []
         
@@ -437,43 +731,40 @@ async def search_photos(request: SearchRequest):
             pet_data = pet_results.get(photo_id)
             clip_sim = clip_results.get(photo_id, 0.0)
             
-            score = calculate_final_score(
+            score, match_info = calculate_final_score(
                 photo_id=photo_id,
                 florence_data=florence_data,
                 object_data=object_data,
                 pet_data=pet_data,
                 clip_similarity=clip_sim,
-                location_data=location_data
+                location_data=location_data,
+                intent_boosts=intent_boosts,
+                query=query,
             )
             
-            # Only filter out if score is effectively zero
-            if score < 0.1:
+            # Filter out very low scores
+            if score < 0.05:
                 continue
             
-            scored_photos.append((score, photo))
+            scored_photos.append((score, photo, match_info))
             
             # Log what matched for debugging
-            matches = []
-            if florence_data and florence_data.get("florence_matches"):
-                matches.append(f"florence:{len(florence_data['florence_matches'])}")
-            if location_data and location_data.get("location_matches"):
-                matches.append(f"location:{len(location_data['location_matches'])}")
-            if object_data and object_data.get("object_matches"):
-                matches.append(f"objects:{len(object_data['object_matches'])}")
-            if pet_data and pet_data.get("pet_matches"):
-                matches.append(f"pets:{len(pet_data['pet_matches'])}")
-            if clip_sim > 0:
-                matches.append(f"clip:{clip_sim:.2f}")
-            logging.info(f"Photo {photo_id}: score={score:.2f} [{', '.join(matches)}]")
+            sources_str = ",".join(match_info["sources"])
+            logging.info(
+                f"Photo {photo_id}: score={score:.3f} "
+                f"[sources:{sources_str}] "
+                f"[exact:{match_info['has_exact_match']}] "
+                f"[generic:{match_info['is_generic_only']}]"
+            )
         
         # Sort by score (highest first)
         scored_photos.sort(key=lambda x: x[0], reverse=True)
-        results = [photo for _, photo in scored_photos]
+        results = [photo for _, photo, _ in scored_photos]
         
         logging.info(f"Returning {len(results)} ranked results")
         
         # ==================================================================
-        # STEP 6: Apply filters (person, category, date)
+        # STEP 7: Apply filters (person, category, date)
         # ==================================================================
         if request.person_id:
             faces = store.get_faces_for_person(request.person_id)

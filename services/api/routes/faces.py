@@ -23,7 +23,10 @@ router = APIRouter(prefix="/faces", tags=["faces"])
 
 @router.delete("/{face_id}")
 async def delete_face(face_id: int):
-    """Delete a specific face detection."""
+    """
+    Delete a specific face detection.
+    Automatically cleans up the person if this was their last face (even if named).
+    """
     try:
         pipeline = MLPipeline()
         result = await pipeline.delete_face(face_id)
@@ -31,7 +34,11 @@ async def delete_face(face_id: int):
         if result["status"] == "not_found":
             raise HTTPException(status_code=404, detail="Face not found")
         
-        return {"status": "success", "message": "Face deleted successfully"}
+        message = "Face deleted successfully"
+        if result.get("person_cleaned_up"):
+            message += " (person with no remaining faces was also deleted)"
+        
+        return {"status": "success", "message": message}
     except HTTPException:
         raise
     except Exception as e:

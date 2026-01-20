@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { peopleApi, Person, Photo } from "../services/api";
-import { Users, User, Edit2, Check, X } from "lucide-react";
+import { Users, User, Edit2, Check, X, Trash2, UserPlus } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
 
@@ -14,9 +14,29 @@ const PeopleView: React.FC = () => {
   const [personPhotos, setPersonPhotos] = useState<Photo[]>([]);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  
+  // Merge mode state
+  const [mergeMode, setMergeMode] = useState(false);
+  const [selectedForMerge, setSelectedForMerge] = useState<Set<number>>(new Set());
+  const [merging, setMerging] = useState(false);
 
   useEffect(() => {
     loadPeople();
+    
+    // Listen for refresh events from header
+    const handleRefresh = () => {
+      loadPeople();
+    };
+    
+    window.addEventListener('refresh-people', handleRefresh);
+    window.addEventListener('refresh-data', handleRefresh);
+    
+    return () => {
+      window.removeEventListener('refresh-people', handleRefresh);
+      window.removeEventListener('refresh-data', handleRefresh);
+    };
   }, []);
 
   const loadPeople = async () => {
@@ -43,7 +63,7 @@ const PeopleView: React.FC = () => {
   };
 
   const handlePersonClick = async (person: Person) => {
-    if (editingId) return; // Don't open photos if editing
+    if (editingId || confirmDelete) return; // Don't open photos if editing or confirming delete
     setSelectedPerson(person);
     setLoadingPhotos(true);
     try {
@@ -54,6 +74,70 @@ const PeopleView: React.FC = () => {
     } finally {
       setLoadingPhotos(false);
     }
+  };
+
+  const handleDeletePerson = async (personId: number) => {
+    try {
+      setDeletingId(personId);
+      await peopleApi.delete(personId);
+      await loadPeople();
+      setConfirmDelete(null);
+    } catch (error) {
+      console.error("Failed to delete person:", error);
+      alert("Failed to delete person. Please try again.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const toggleMergeSelection = (personId: number) => {
+    setSelectedForMerge(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(personId)) {
+        newSet.delete(personId);
+      } else {
+        newSet.add(personId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleMergePeople = async () => {
+    if (selectedForMerge.size < 2) {
+      alert("Please select at least 2 people to merge.");
+      return;
+    }
+
+    const selectedIds = Array.from(selectedForMerge);
+    // Find the person with a name to be the target, or use the first one
+    const targetPerson = people.find(p => selectedIds.includes(p.id) && p.name) || 
+                         people.find(p => selectedIds.includes(p.id));
+    
+    if (!targetPerson) return;
+
+    const targetId = targetPerson.id;
+    const sourceIds = selectedIds.filter(id => id !== targetId);
+
+    try {
+      setMerging(true);
+      // Merge all selected people into the target
+      for (const sourceId of sourceIds) {
+        await peopleApi.merge(sourceId, targetId);
+      }
+      await loadPeople();
+      setSelectedForMerge(new Set());
+      setMergeMode(false);
+    } catch (error) {
+      console.error("Failed to merge people:", error);
+      alert("Failed to merge people. Please try again.");
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  const cancelMergeMode = () => {
+    setMergeMode(false);
+    setSelectedForMerge(new Set());
   };
 
   if (loading) {
@@ -80,25 +164,88 @@ const PeopleView: React.FC = () => {
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
       <div className="mb-10">
-        <div className="flex items-center gap-3 mb-2">
-          <Users className="text-brand-primary" size={24} />
-          <h1 className="text-3xl font-black text-light-text-primary dark:text-dark-text-primary tracking-tight">
-            People
-          </h1>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-3">
+            <Users className="text-brand-primary" size={24} />
+            <h1 className="text-3xl font-black text-light-text-primary dark:text-dark-text-primary tracking-tight">
+              People
+            </h1>
+          </div>
+          
+          {/* Merge Mode Controls */}
+          {mergeMode ? (
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">
+                {selectedForMerge.size} selected
+              </span>
+              <button
+                onClick={handleMergePeople}
+                disabled={selectedForMerge.size < 2 || merging}
+                className="px-4 py-2 bg-brand-primary text-white dark:text-black rounded-xl text-sm font-bold hover:bg-brand-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {merging ? (
+                  <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <UserPlus size={16} />
+                )}
+                Merge Selected
+              </button>
+              <button
+                onClick={cancelMergeMode}
+                disabled={merging}
+                className="px-4 py-2 bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-xl text-sm font-bold text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary hover:border-brand-primary transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setMergeMode(true)}
+              className="px-4 py-2 bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-xl text-sm font-bold text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary hover:border-brand-primary transition-colors flex items-center gap-2"
+            >
+              <UserPlus size={16} />
+              Merge People
+            </button>
+          )}
         </div>
         <p className="text-light-text-secondary dark:text-dark-text-secondary font-medium">
-          Automatically grouped face clusters from your entire collection.
+          {mergeMode 
+            ? "Select people to merge together. The merged person will keep the name of the first named person."
+            : "Automatically grouped face clusters from your entire collection."
+          }
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-6">
-        {people.map((person) => (
+        {people.map((person) => {
+          const isSelectedForMerge = selectedForMerge.has(person.id);
+          
+          return (
           <Card 
             key={person.id} 
-            className="p-4 group cursor-pointer" 
-            hover={!editingId}
-            onClick={() => handlePersonClick(person)}
+            className={`p-4 group cursor-pointer relative ${isSelectedForMerge ? 'ring-2 ring-brand-primary' : ''}`}
+            hover={!editingId && !mergeMode}
+            onClick={() => {
+              if (mergeMode) {
+                toggleMergeSelection(person.id);
+              } else {
+                handlePersonClick(person);
+              }
+            }}
           >
+            {/* Merge Mode Checkbox */}
+            {mergeMode && (
+              <div className="absolute top-2 right-2 z-10">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center transition-colors ${
+                  isSelectedForMerge 
+                    ? 'bg-brand-primary text-white dark:text-black' 
+                    : 'bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border'
+                }`}>
+                  {isSelectedForMerge ? <Check size={14} /> : null}
+                </div>
+              </div>
+            )}
+            
             <div className="aspect-square bg-brand-primary/5 dark:bg-brand-primary/10 rounded-2xl mb-4 flex items-center justify-center text-brand-primary group-hover:scale-105 transition-transform duration-500 overflow-hidden">
               {person.thumbnail_url ? (
                 <img 
@@ -116,7 +263,39 @@ const PeopleView: React.FC = () => {
               )}
             </div>
 
-            {editingId === person.id ? (
+            {confirmDelete === person.id ? (
+              <div className="space-y-3 animate-in fade-in zoom-in-95 duration-200">
+                <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary font-medium text-center">
+                  Delete this person? This will unassign all their faces.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeletePerson(person.id);
+                    }}
+                    disabled={deletingId === person.id}
+                    className="flex-1 h-9 bg-red-500 text-white rounded-lg text-xs font-bold hover:bg-red-600 transition-colors flex items-center justify-center disabled:opacity-50"
+                  >
+                    {deletingId === person.id ? (
+                      <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      "Delete"
+                    )}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirmDelete(null);
+                    }}
+                    disabled={deletingId === person.id}
+                    className="flex-1 h-9 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-lg text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary hover:text-brand-primary transition-colors flex items-center justify-center disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : editingId === person.id ? (
               <div className="space-y-3 animate-in fade-in zoom-in-95 duration-200">
                 <input
                   type="text"
@@ -128,13 +307,17 @@ const PeopleView: React.FC = () => {
                 />
                 <div className="flex gap-2">
                   <button
-                    onClick={() => handleRename(person.id, editName)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRename(person.id, editName);
+                    }}
                     className="flex-1 h-9 bg-brand-primary text-white dark:text-black rounded-lg text-xs font-bold hover:bg-brand-secondary transition-colors flex items-center justify-center"
                   >
                     <Check size={14} />
                   </button>
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setEditingId(null);
                       setEditName("");
                     }}
@@ -150,16 +333,29 @@ const PeopleView: React.FC = () => {
                   <span className="font-bold text-light-text-primary dark:text-dark-text-primary truncate transition-colors group-hover:text-brand-primary">
                     {person.name || `Unnamed Person`}
                   </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingId(person.id);
-                      setEditName(person.name || "");
-                    }}
-                    className="p-1 opacity-0 group-hover:opacity-100 text-light-text-tertiary dark:text-dark-text-tertiary hover:text-brand-primary transition-all"
-                  >
-                    <Edit2 size={14} />
-                  </button>
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingId(person.id);
+                        setEditName(person.name || "");
+                      }}
+                      className="p-1 text-light-text-tertiary dark:text-dark-text-tertiary hover:text-brand-primary transition-colors"
+                      title="Rename person"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDelete(person.id);
+                      }}
+                      className="p-1 text-light-text-tertiary dark:text-dark-text-tertiary hover:text-red-500 transition-colors"
+                      title="Delete person"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center gap-1.5 text-xs font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-wider">
                   <span>{person.face_count}</span>
@@ -168,7 +364,8 @@ const PeopleView: React.FC = () => {
               </div>
             )}
           </Card>
-        ))}
+        );
+        })}
       </div>
 
       {/* Person Photos Modal */}
@@ -184,16 +381,32 @@ const PeopleView: React.FC = () => {
           <div className="flex-1 overflow-y-auto p-8" onClick={e => e.stopPropagation()}>
             <div className="max-w-[1600px] mx-auto">
               <div className="mb-8">
-                <button
-                  onClick={() => {
-                    setSelectedPerson(null);
-                    setPersonPhotos([]);
-                    setSelectedPhoto(null);
-                  }}
-                  className="mb-4 px-4 py-2 bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-xl text-light-text-primary dark:text-dark-text-primary hover:border-brand-primary hover:text-brand-primary transition-all font-bold text-sm"
-                >
-                  ← Back
-                </button>
+                <div className="flex items-start justify-between mb-4">
+                  <button
+                    onClick={() => {
+                      setSelectedPerson(null);
+                      setPersonPhotos([]);
+                      setSelectedPhoto(null);
+                    }}
+                    className="px-4 py-2 bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-xl text-light-text-primary dark:text-dark-text-primary hover:border-brand-primary hover:text-brand-primary transition-all font-bold text-sm"
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (window.confirm(`Delete ${selectedPerson.name || 'this person'}? This will unassign all their faces.`)) {
+                        await handleDeletePerson(selectedPerson.id);
+                        setSelectedPerson(null);
+                        setPersonPhotos([]);
+                        setSelectedPhoto(null);
+                      }
+                    }}
+                    className="px-4 py-2 bg-red-500/10 border border-red-500/30 rounded-xl text-red-500 hover:bg-red-500 hover:text-white transition-all font-bold text-sm flex items-center gap-2"
+                  >
+                    <Trash2 size={16} />
+                    Delete Person
+                  </button>
+                </div>
                 <h2 className="text-3xl font-black text-light-text-primary dark:text-dark-text-primary tracking-tight mb-2">
                   {selectedPerson.name || `Unnamed Person`}
                 </h2>

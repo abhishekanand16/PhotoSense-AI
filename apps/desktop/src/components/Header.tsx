@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { scanApi, healthApi } from "../services/api";
+import { scanApi, healthApi, peopleApi } from "../services/api";
 import { openFolderDialog } from "../utils/tauri";
 import { useTheme } from "./common/ThemeProvider";
 import {
@@ -25,6 +25,7 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
   const [processingStatus, setProcessingStatus] = useState<"idle" | "scanning">("idle");
   const [scanProgress, setScanProgress] = useState(0);
   const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Check backend connection status periodically
   useEffect(() => {
@@ -131,9 +132,48 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
     }
   };
 
-  const handleRefresh = () => {
-    // Dispatch refresh event to reload photos
-    window.dispatchEvent(new CustomEvent('refresh-photos'));
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    
+    setIsRefreshing(true);
+    try {
+      // Run all cleanups in parallel for speed
+      const cleanupResults = await Promise.allSettled([
+        // Clean up orphaned people (0 faces)
+        peopleApi.cleanupOrphans().then(r => ({ type: 'people', count: r.count })),
+        
+        // Clean up orphaned objects (deleted photos)
+        fetch('http://localhost:8000/objects/cleanup-orphans', { method: 'POST' })
+          .then(r => r.json())
+          .then(r => ({ type: 'objects', count: r.deleted_objects })),
+        
+        // Clean up orphaned locations (deleted photos)
+        fetch('http://localhost:8000/places/cleanup-orphans', { method: 'POST' })
+          .then(r => r.json())
+          .then(r => ({ type: 'locations', count: r.deleted_locations })),
+      ]);
+      
+      // Log cleanup results
+      cleanupResults.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.count > 0) {
+          console.log(`Cleaned up ${result.value.count} orphaned ${result.value.type}`);
+        }
+      });
+      
+      // Dispatch refresh events for all views
+      window.dispatchEvent(new CustomEvent('refresh-photos'));
+      window.dispatchEvent(new CustomEvent('refresh-people'));
+      window.dispatchEvent(new CustomEvent('refresh-objects'));
+      window.dispatchEvent(new CustomEvent('refresh-places'));
+      window.dispatchEvent(new CustomEvent('refresh-data'));
+      
+      // Small delay for visual feedback
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      console.error('Refresh failed:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   return (
@@ -203,10 +243,11 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
 
             <button
               onClick={handleRefresh}
-              className="p-2.5 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary hover:border-brand-primary transition-all"
-              title="Refresh"
+              disabled={isRefreshing}
+              className="p-2.5 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary hover:border-brand-primary transition-all disabled:opacity-50"
+              title="Refresh & cleanup"
             >
-              <RefreshCw size={18} />
+              <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
             </button>
 
             {onOpenSettings && (

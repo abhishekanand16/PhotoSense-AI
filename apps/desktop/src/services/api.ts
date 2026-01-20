@@ -145,6 +145,13 @@ export const peopleApi = {
   merge: async (sourceId: number, targetId: number): Promise<void> => {
     await api.post("/people/merge", { source_person_id: sourceId, target_person_id: targetId });
   },
+  delete: async (personId: number): Promise<void> => {
+    await api.delete(`/people/${personId}`);
+  },
+  cleanupOrphans: async (): Promise<{ deleted_people: number[]; count: number }> => {
+    const response = await api.post("/people/cleanup-orphans");
+    return response.data;
+  },
 };
 
 export const scanApi = {
