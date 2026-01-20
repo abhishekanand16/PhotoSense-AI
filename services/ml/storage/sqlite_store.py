@@ -1,6 +1,8 @@
 """SQLite database for metadata storage."""
 
 import sqlite3
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -11,14 +13,52 @@ import numpy as np
 class SQLiteStore:
     """Manages SQLite database for photo metadata, faces, objects, and clusters."""
 
+    # Class-level lock for write serialization
+    _write_lock = threading.Lock()
+
     def __init__(self, db_path: str = "photosense.db"):
         """Initialize database connection."""
         self.db_path = db_path
         self._init_schema()
 
+    @contextmanager
+    def _get_connection(self, readonly: bool = False):
+        """Context manager for database connections with WAL mode."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        if readonly:
+            conn.execute("PRAGMA query_only=ON")
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _transaction(self):
+        """Context manager for write transactions with locking."""
+        with self._write_lock:
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
     def _init_schema(self) -> None:
         """Create database tables if they don't exist."""
         conn = sqlite3.connect(self.db_path, timeout=30)
+        # Enable WAL mode for better concurrency
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         cursor = conn.cursor()
 
         # Photos table
@@ -334,6 +374,44 @@ class SQLiteStore:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def add_face_with_embedding(
+        self,
+        photo_id: int,
+        bbox_x: int,
+        bbox_y: int,
+        bbox_w: int,
+        bbox_h: int,
+        confidence: float,
+        embedding: np.ndarray,
+        cluster_id: Optional[int] = None,
+        person_id: Optional[int] = None,
+    ) -> int:
+        """Add face and embedding atomically in single transaction. Returns face_id."""
+        with self._transaction() as conn:
+            cursor = conn.cursor()
+            # 1. Insert face
+            cursor.execute(
+                """
+                INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, cluster_id, person_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, cluster_id, person_id),
+            )
+            face_id = cursor.lastrowid
+            
+            # 2. Store embedding
+            embedding_bytes = embedding.tobytes()
+            cursor.execute(
+                "INSERT INTO embeddings (face_id, embedding) VALUES (?, ?)",
+                (face_id, embedding_bytes),
+            )
+            embedding_id = cursor.lastrowid
+            
+            # 3. Update face with embedding_id reference
+            cursor.execute("UPDATE faces SET embedding_id = ? WHERE id = ?", (embedding_id, face_id))
+            
+            return face_id
 
     def add_face(
         self,
@@ -788,6 +866,45 @@ class SQLiteStore:
     # =========================================================================
     # PET IDENTITY METHODS (parallel to face/people methods)
     # =========================================================================
+
+    def add_pet_detection_with_embedding(
+        self,
+        photo_id: int,
+        bbox_x: int,
+        bbox_y: int,
+        bbox_w: int,
+        bbox_h: int,
+        species: str,
+        confidence: float,
+        embedding: np.ndarray,
+        cluster_id: Optional[int] = None,
+        pet_id: Optional[int] = None,
+    ) -> int:
+        """Add pet detection and embedding atomically in single transaction. Returns pet_detection_id."""
+        with self._transaction() as conn:
+            cursor = conn.cursor()
+            # 1. Insert pet detection
+            cursor.execute(
+                """
+                INSERT INTO pet_detections (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, species, confidence, cluster_id, pet_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, species, confidence, cluster_id, pet_id),
+            )
+            pet_detection_id = cursor.lastrowid
+            
+            # 2. Store embedding
+            embedding_bytes = embedding.tobytes()
+            cursor.execute(
+                "INSERT INTO pet_embeddings (pet_detection_id, embedding) VALUES (?, ?)",
+                (pet_detection_id, embedding_bytes),
+            )
+            embedding_id = cursor.lastrowid
+            
+            # 3. Update detection with embedding_id reference
+            cursor.execute("UPDATE pet_detections SET embedding_id = ? WHERE id = ?", (embedding_id, pet_detection_id))
+            
+            return pet_detection_id
 
     def add_pet_detection(
         self,

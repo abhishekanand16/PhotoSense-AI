@@ -24,12 +24,54 @@ Consistency guarantees:
 """
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 from sklearn.cluster import DBSCAN
+
+
+def validate_photo_path(photo_path: str) -> Path:
+    """
+    Validate and normalize a photo path for safety.
+    
+    Prevents:
+    - Path traversal attacks (../)
+    - Symlink attacks
+    - Non-file paths
+    
+    Returns:
+        Resolved absolute Path object
+        
+    Raises:
+        ValueError: If path is invalid or unsafe
+    """
+    try:
+        path = Path(photo_path)
+        
+        # Resolve to absolute path (this also normalizes .. and .)
+        resolved = path.resolve()
+        
+        # Check for symlink - only allow if it points to a regular file
+        if path.is_symlink():
+            target = resolved
+            if not target.is_file():
+                raise ValueError(f"Symlink does not point to a regular file: {photo_path}")
+        
+        # Must be a file (not directory, device, etc.)
+        if not resolved.is_file():
+            raise ValueError(f"Path is not a regular file: {photo_path}")
+        
+        # Check path doesn't contain null bytes (security)
+        if '\x00' in str(resolved):
+            raise ValueError(f"Path contains null bytes: {photo_path}")
+        
+        return resolved
+        
+    except (OSError, ValueError) as e:
+        raise ValueError(f"Invalid photo path '{photo_path}': {e}")
 
 from services.ml.detectors.face_detector import FaceDetector
 from services.ml.detectors.object_detector import ObjectDetector
@@ -155,6 +197,13 @@ class MLPipeline:
         This is Phase 1 of the import process - fast import that allows photos
         to appear in the dashboard immediately, grouped by date.
         """
+        # Validate path for safety (prevents traversal/symlink attacks)
+        try:
+            validated_path = validate_photo_path(photo_path)
+            photo_path = str(validated_path)
+        except ValueError as e:
+            return {"status": "error", "reason": str(e)}
+        
         # Extract EXIF metadata first
         metadata = extract_exif_metadata(photo_path)
         
@@ -221,40 +270,43 @@ class MLPipeline:
             "image_embedding_id": None,
         }
 
-        # Check if file exists
-        from pathlib import Path
-        if not Path(photo_path).exists():
-            return {"status": "error", "reason": "file_not_found"}
+        # Validate path for safety
+        try:
+            validated_path = validate_photo_path(photo_path)
+            photo_path = str(validated_path)
+        except ValueError as e:
+            logging.error(f"Invalid photo path: {e}")
+            return {"status": "error", "reason": str(e)}
 
         # Detect faces AND generate embeddings in one pass (more efficient)
         face_detections = self.face_detector.detect_with_embeddings(photo_path)
+        
+        # Collect faces to add to FAISS after all DB commits succeed
+        faces_for_faiss = []
         
         for face_data in face_detections:
             x, y, w, h = face_data['bbox']
             conf = face_data['confidence']
             embedding = face_data['embedding']
             
-            # Store face in DB
-            face_id = self.store.add_face(
+            # Store face + embedding atomically in DB (single transaction)
+            face_id = self.store.add_face_with_embedding(
                 photo_id=photo_id,
                 bbox_x=x,
                 bbox_y=y,
                 bbox_w=w,
                 bbox_h=h,
                 confidence=conf,
-                embedding_id=None,  # Will update after storing embedding
+                embedding=embedding,
             )
 
-            # Store embedding in SQLite for retrieval
-            self.store.store_embedding(face_id, embedding)
-            
-            # Update face with embedding reference
-            self.store.update_face_embedding(face_id, face_id)
-
-            # Add to FAISS index for similarity search
-            self.index.add_vectors("face", embedding.reshape(1, -1), [face_id])
-
+            # Queue for FAISS update (only after DB commit succeeded)
+            faces_for_faiss.append((face_id, embedding))
             results["faces"].append(face_id)
+
+        # Add to FAISS index AFTER all DB operations succeed
+        for face_id, embedding in faces_for_faiss:
+            self.index.add_vectors("face", embedding.reshape(1, -1), [face_id])
 
         # Save FAISS index after batch of faces
         if results["faces"]:
@@ -291,6 +343,9 @@ class MLPipeline:
                 if img is not None:
                     img_height, img_width = img.shape[:2]
                     
+                    # Collect pets to add to FAISS after all DB commits succeed
+                    pets_for_faiss = []
+                    
                     for x, y, w, h, species, conf in animal_detections:
                         # Add padding to crop (20% on each side)
                         padding = 0.2
@@ -316,8 +371,8 @@ class MLPipeline:
                         if np.allclose(pet_embedding, 0):
                             continue
                         
-                        # Store pet detection in DB
-                        pet_detection_id = self.store.add_pet_detection(
+                        # Store pet detection + embedding atomically in DB
+                        pet_detection_id = self.store.add_pet_detection_with_embedding(
                             photo_id=photo_id,
                             bbox_x=x,
                             bbox_y=y,
@@ -325,18 +380,16 @@ class MLPipeline:
                             bbox_h=h,
                             species=species,
                             confidence=conf,
+                            embedding=pet_embedding,
                         )
                         
-                        # Store embedding in SQLite
-                        self.store.store_pet_embedding(pet_detection_id, pet_embedding)
-                        
-                        # Update detection with embedding reference
-                        self.store.update_pet_detection_embedding(pet_detection_id, pet_detection_id)
-                        
-                        # Add to FAISS index for similarity search
-                        self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
-                        
+                        # Queue for FAISS update (only after DB commit succeeded)
+                        pets_for_faiss.append((pet_detection_id, pet_embedding))
                         results["pets"].append(pet_detection_id)
+                    
+                    # Add to FAISS index AFTER all DB operations succeed
+                    for pet_detection_id, pet_embedding in pets_for_faiss:
+                        self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
                     
                     # Save FAISS index after batch of pets
                     if results["pets"]:
