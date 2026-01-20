@@ -218,6 +218,22 @@ class SQLiteStore:
             )
         """)
 
+        # =====================================================================
+        # CUSTOM USER TAGS TABLE
+        # =====================================================================
+        
+        # Photo tags table (user-created custom tags)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS photo_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL,
+                tag TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+                UNIQUE(photo_id, tag)
+            )
+        """)
+
         # Create indexes only if the tables and columns exist
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path)")
@@ -300,6 +316,17 @@ class SQLiteStore:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_locations_city ON photo_locations(city)")
             if "country" in columns:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_locations_country ON photo_locations(country)")
+        except sqlite3.OperationalError:
+            pass
+
+        # Photo tags indexes
+        try:
+            cursor.execute("PRAGMA table_info(photo_tags)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "photo_id" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_photo_tags_photo ON photo_tags(photo_id)")
+            if "tag" in columns:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_photo_tags_tag ON photo_tags(tag)")
         except sqlite3.OperationalError:
             pass
 
@@ -1551,3 +1578,296 @@ class SQLiteStore:
         conn.commit()
         conn.close()
         return deleted
+    
+    def cleanup_orphaned_people(self) -> List[int]:
+        """
+        Find and delete people who have zero faces.
+        Deletes ALL people with no faces, even if they have a name assigned.
+        No empty placeholder people are kept.
+        
+        Returns list of deleted person IDs.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Find people with no faces
+            cursor.execute("""
+                SELECT p.id 
+                FROM people p
+                LEFT JOIN faces f ON f.person_id = p.id
+                WHERE f.id IS NULL
+            """)
+            orphaned_person_ids = [row[0] for row in cursor.fetchall()]
+            
+            # Delete orphaned people
+            if orphaned_person_ids:
+                placeholders = ','.join('?' * len(orphaned_person_ids))
+                cursor.execute(f"DELETE FROM people WHERE id IN ({placeholders})", orphaned_person_ids)
+                conn.commit()
+            
+            conn.close()
+            return orphaned_person_ids
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def cleanup_orphaned_pets(self) -> List[int]:
+        """
+        Find and delete pets who have zero detections.
+        Deletes ALL pets with no detections, even if they have a name assigned.
+        No empty placeholder pets are kept.
+        
+        Returns list of deleted pet IDs.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Find pets with no detections
+            cursor.execute("""
+                SELECT p.id 
+                FROM pets p
+                LEFT JOIN pet_detections pd ON pd.pet_id = p.id
+                WHERE pd.id IS NULL
+            """)
+            orphaned_pet_ids = [row[0] for row in cursor.fetchall()]
+            
+            # Delete orphaned pets
+            if orphaned_pet_ids:
+                placeholders = ','.join('?' * len(orphaned_pet_ids))
+                cursor.execute(f"DELETE FROM pets WHERE id IN ({placeholders})", orphaned_pet_ids)
+                conn.commit()
+            
+            conn.close()
+            return orphaned_pet_ids
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def cleanup_orphaned_objects(self) -> int:
+        """
+        Find and delete objects that reference non-existent photos.
+        Returns count of deleted objects.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Delete objects where photo doesn't exist
+            cursor.execute("""
+                DELETE FROM objects 
+                WHERE photo_id NOT IN (SELECT id FROM photos)
+            """)
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return deleted_count
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def cleanup_orphaned_locations(self) -> int:
+        """
+        Find and delete photo_locations that reference non-existent photos.
+        Returns count of deleted locations.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Delete locations where photo doesn't exist
+            cursor.execute("""
+                DELETE FROM photo_locations 
+                WHERE photo_id NOT IN (SELECT id FROM photos)
+            """)
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return deleted_count
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+    
+    def cleanup_orphaned_scenes(self) -> int:
+        """
+        Find and delete scenes that reference non-existent photos.
+        Returns count of deleted scenes.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            # Delete scenes where photo doesn't exist
+            cursor.execute("""
+                DELETE FROM scenes 
+                WHERE photo_id NOT IN (SELECT id FROM photos)
+            """)
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return deleted_count
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+
+    # =========================================================================
+    # CUSTOM USER TAGS METHODS
+    # =========================================================================
+
+    def add_tag(self, photo_id: int, tag: str) -> int:
+        """
+        Add a custom tag to a photo. Returns tag_id.
+        Tag is normalized (lowercase, trimmed).
+        """
+        # Normalize tag
+        normalized_tag = tag.lower().strip()
+        if not normalized_tag:
+            raise ValueError("Tag cannot be empty")
+        
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT OR IGNORE INTO photo_tags (photo_id, tag) VALUES (?, ?)",
+                (photo_id, normalized_tag),
+            )
+            conn.commit()
+            
+            # Get the tag ID (either new or existing)
+            cursor.execute(
+                "SELECT id FROM photo_tags WHERE photo_id = ? AND tag = ?",
+                (photo_id, normalized_tag),
+            )
+            row = cursor.fetchone()
+            tag_id = row[0] if row else 0
+            conn.close()
+            return tag_id
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e
+
+    def remove_tag(self, photo_id: int, tag: str) -> bool:
+        """Remove a custom tag from a photo. Returns True if deleted."""
+        normalized_tag = tag.lower().strip()
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM photo_tags WHERE photo_id = ? AND tag = ?",
+            (photo_id, normalized_tag),
+        )
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+    def get_tags_for_photo(self, photo_id: int) -> List[str]:
+        """Get all custom tags for a photo."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tag FROM photo_tags WHERE photo_id = ? ORDER BY tag",
+            (photo_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def get_photos_by_tag(self, tag: str) -> List[Dict]:
+        """Get all photos with a specific tag."""
+        normalized_tag = tag.lower().strip()
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT p.* FROM photos p
+            INNER JOIN photo_tags pt ON p.id = pt.photo_id
+            WHERE pt.tag = ?
+            ORDER BY p.date_taken DESC, p.created_at DESC
+            """,
+            (normalized_tag,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_all_tags_with_counts(self) -> List[Dict]:
+        """
+        Get all unique tags with photo counts.
+        Used for Objects > Custom section in the UI.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT tag, COUNT(DISTINCT photo_id) as photo_count
+            FROM photo_tags
+            GROUP BY tag
+            ORDER BY photo_count DESC, tag ASC
+            """
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"tag": row[0], "photo_count": row[1]} for row in rows]
+
+    def search_tags_by_text(self, query: str) -> List[Dict]:
+        """
+        Search custom tags by text matching.
+        Returns list of dicts with photo_id, tag for search integration.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        query_lower = query.lower().strip()
+        
+        # Search for exact match first, then partial
+        cursor.execute(
+            """
+            SELECT photo_id, tag,
+                   CASE 
+                       WHEN tag = ? THEN 'exact'
+                       WHEN tag LIKE ? THEN 'partial'
+                       ELSE 'word'
+                   END as match_type
+            FROM photo_tags
+            WHERE tag = ? OR tag LIKE ?
+            """,
+            (query_lower, f"%{query_lower}%", query_lower, f"%{query_lower}%"),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def delete_tags_for_photo(self, photo_id: int) -> int:
+        """Delete all tags for a photo. Returns count of deleted tags."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM photo_tags WHERE photo_id = ?", (photo_id,))
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return deleted_count
+
+    def cleanup_orphaned_tags(self) -> int:
+        """
+        Find and delete tags that reference non-existent photos.
+        Returns count of deleted tags.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                DELETE FROM photo_tags 
+                WHERE photo_id NOT IN (SELECT id FROM photos)
+            """)
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return deleted_count
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise e

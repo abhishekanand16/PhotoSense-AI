@@ -163,6 +163,123 @@ async def delete_photos(photo_ids: List[int]):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/{photo_id}/metadata")
+async def get_photo_metadata(photo_id: int):
+    """
+    Get comprehensive metadata for a photo.
+    
+    Aggregates data from multiple tables:
+    - File info (name, size, format, dimensions)
+    - Dates (taken, imported)
+    - Camera info (make, model)
+    - Location (city, region, country, coordinates)
+    - Detected people
+    - Detected objects
+    - Scene tags
+    - Custom user tags
+    """
+    store = SQLiteStore()
+    try:
+        # Get photo
+        photo = store.get_photo(photo_id)
+        if not photo:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        
+        file_path = photo.get("file_path", "")
+        file_name = file_path.split("/")[-1] if file_path else ""
+        file_extension = file_name.split(".")[-1].upper() if "." in file_name else ""
+        
+        # File info
+        file_info = {
+            "name": file_name,
+            "size": photo.get("file_size"),
+            "format": file_extension,
+            "width": photo.get("width"),
+            "height": photo.get("height"),
+            "path": file_path,
+        }
+        
+        # Dates
+        dates = {
+            "date_taken": photo.get("date_taken"),
+            "date_imported": photo.get("created_at"),
+        }
+        
+        # Camera info
+        camera = {
+            "model": photo.get("camera_model"),
+        }
+        
+        # Location
+        location_data = store.get_location(photo_id)
+        location = None
+        if location_data:
+            location = {
+                "city": location_data.get("city"),
+                "region": location_data.get("region"),
+                "country": location_data.get("country"),
+                "latitude": location_data.get("latitude"),
+                "longitude": location_data.get("longitude"),
+            }
+        
+        # Detected people
+        faces = store.get_faces_for_photo(photo_id)
+        people = []
+        seen_person_ids = set()
+        for face in faces:
+            person_id = face.get("person_id")
+            if person_id and person_id not in seen_person_ids:
+                person = store.get_person(person_id)
+                if person:
+                    people.append({
+                        "id": person_id,
+                        "name": person.get("name"),
+                    })
+                    seen_person_ids.add(person_id)
+        
+        # Detected objects (exclude 'person' and 'other')
+        objects_data = store.get_objects_for_photo(photo_id)
+        objects = []
+        for obj in objects_data:
+            category = obj.get("category", "")
+            if "person" not in category.lower() and category.lower() != "other":
+                objects.append({
+                    "category": category,
+                    "confidence": obj.get("confidence"),
+                })
+        
+        # Scene tags
+        scenes_data = store.get_scenes_for_photo(photo_id)
+        scenes = []
+        for scene in scenes_data:
+            label = scene.get("scene_label", "")
+            # Skip florence: prefixed tags for cleaner display
+            if not label.startswith("florence:"):
+                scenes.append({
+                    "label": label,
+                    "confidence": scene.get("confidence"),
+                })
+        
+        # Custom user tags
+        custom_tags = store.get_tags_for_photo(photo_id)
+        
+        return {
+            "photo_id": photo_id,
+            "file_info": file_info,
+            "dates": dates,
+            "camera": camera,
+            "location": location,
+            "people": people,
+            "objects": objects,
+            "scenes": scenes,
+            "custom_tags": custom_tags,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/update-metadata", response_model=dict)
 async def update_metadata_for_all_photos(background_tasks: BackgroundTasks):
     """Update metadata for all photos that are missing it."""

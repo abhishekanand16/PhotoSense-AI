@@ -9,7 +9,7 @@ Image.MAX_IMAGE_PIXELS = 250_000_000  # 250 megapixels
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from services.api.routes import faces, objects, people, pets, photos, places, scan, scenes, search, stats
+from services.api.routes import faces, objects, people, pets, photos, places, scan, scenes, search, stats, tags
 
 app = FastAPI(
     title="PhotoSense-AI API",
@@ -37,6 +37,7 @@ app.include_router(search.router)
 app.include_router(objects.router)
 app.include_router(scenes.router)
 app.include_router(stats.router)
+app.include_router(tags.router)
 
 
 @app.get("/")

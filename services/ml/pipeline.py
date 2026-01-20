@@ -308,11 +308,28 @@ class MLPipeline:
         
         # Collect faces to add to FAISS after all DB commits succeed
         faces_for_faiss = []
+        auto_assigned_count = 0
         
         for face_data in face_detections:
             x, y, w, h = face_data['bbox']
             conf = face_data['confidence']
             embedding = face_data['embedding']
+            
+            # =====================================================================
+            # PERSISTENT IDENTITY LEARNING
+            # Before storing, search for similar faces in FAISS
+            # If we find a strong match to a known person, auto-assign this face
+            # =====================================================================
+            auto_person_id = None
+            
+            if conf >= CLUSTERING_CONFIG["min_confidence"]:
+                try:
+                    auto_person_id = self._find_matching_person(embedding)
+                    if auto_person_id:
+                        auto_assigned_count += 1
+                        logging.info(f"Auto-assigned face to person {auto_person_id} (similarity match)")
+                except Exception as e:
+                    logging.warning(f"Identity matching failed: {str(e)}")
             
             # Store face + embedding atomically in DB (single transaction)
             face_id = self.store.add_face_with_embedding(
@@ -323,6 +340,7 @@ class MLPipeline:
                 bbox_h=h,
                 confidence=conf,
                 embedding=embedding,
+                person_id=auto_person_id,  # May be None if no match found
             )
 
             # Queue for FAISS update (only after DB commit succeeded)
@@ -336,6 +354,9 @@ class MLPipeline:
         # Save FAISS index after batch of faces
         if results["faces"]:
             self.index.save_index("face")
+        
+        if auto_assigned_count > 0:
+            logging.info(f"Auto-assigned {auto_assigned_count} faces to known people")
 
         # Detect objects
         try:
@@ -852,6 +873,92 @@ class MLPipeline:
                 })
         
         return results[:k]  # Return exactly k results
+
+    def _find_matching_person(
+        self,
+        embedding: np.ndarray,
+        similarity_threshold: float = 0.70,
+        min_matches: int = 1,
+    ) -> Optional[int]:
+        """
+        Find a matching person for a face embedding using FAISS similarity search.
+        
+        This is the core of PERSISTENT IDENTITY LEARNING:
+        - After a merge, the merged person has multiple face embeddings
+        - New face embeddings are compared against ALL known faces in FAISS
+        - If a strong match is found to a face that belongs to a person, auto-assign
+        
+        Args:
+            embedding: The face embedding to match (512-dim numpy array)
+            similarity_threshold: Minimum cosine similarity to consider a match (0-1)
+                                 0.70 = high confidence, avoids false positives
+            min_matches: Minimum number of matching faces to confirm identity
+        
+        Returns:
+            person_id if a match is found, None otherwise
+        """
+        import logging
+        
+        # Search FAISS for similar faces
+        # Use higher k to find multiple matches for the same person
+        k = 10
+        distances, similar_face_ids = self.index.search("face", embedding, k=k)
+        
+        if len(similar_face_ids) == 0:
+            return None
+        
+        # Count matches per person_id above the similarity threshold
+        person_matches = {}  # person_id -> list of similarities
+        
+        for distance, similar_face_id in zip(distances, similar_face_ids):
+            if similar_face_id < 0:
+                continue
+            
+            # Convert distance to similarity (FAISS IndexFlatIP returns inner product)
+            # For normalized vectors, this IS the cosine similarity
+            similarity = float(distance)
+            
+            if similarity < similarity_threshold:
+                continue
+            
+            # Get the face and check if it has a person_id
+            face = self.store.get_face(int(similar_face_id))
+            if not face:
+                continue
+            
+            person_id = face.get("person_id")
+            if person_id is None:
+                continue
+            
+            if person_id not in person_matches:
+                person_matches[person_id] = []
+            person_matches[person_id].append(similarity)
+        
+        if not person_matches:
+            return None
+        
+        # Find the person with the most matches (and highest average similarity)
+        best_person_id = None
+        best_score = 0
+        
+        for person_id, similarities in person_matches.items():
+            if len(similarities) >= min_matches:
+                avg_similarity = sum(similarities) / len(similarities)
+                # Score = number of matches * average similarity
+                score = len(similarities) * avg_similarity
+                
+                if score > best_score:
+                    best_score = score
+                    best_person_id = person_id
+        
+        if best_person_id:
+            logging.info(
+                f"Identity match found: person_id={best_person_id}, "
+                f"matches={len(person_matches[best_person_id])}, "
+                f"best_similarity={max(person_matches[best_person_id]):.3f}"
+            )
+        
+        return best_person_id
     
     async def rebuild_faiss_index(self) -> Dict:
         """

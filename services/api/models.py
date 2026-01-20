@@ -103,6 +103,14 @@ class MergePeopleRequest(BaseModel):
     target_person_id: int
 
 
+class MergeMultiplePeopleRequest(BaseModel):
+    """Request to merge multiple people into one."""
+
+    person_ids: List[int]  # IDs of people to merge (will be merged into target)
+    target_person_id: int  # The person to merge all others into
+    min_confidence: float = 0.5  # Minimum face confidence to include in merge
+
+
 class SearchRequest(BaseModel):
     """Search request."""
 
