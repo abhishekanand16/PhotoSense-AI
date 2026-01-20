@@ -723,57 +723,57 @@ class MLPipeline:
         self, 
         query_text: str, 
         k: int = 10,
-        min_similarity: float = 0.20,
-        return_scores: bool = False
+        min_similarity: float = 0.20
     ) -> List[int]:
         """
-        Search for similar images using text query with similarity threshold.
+        Search for similar images using text query with similarity filtering.
         
         Args:
-            query_text: Natural language query (e.g., "beach sunset", "dog playing")
+            query_text: Natural language query
             k: Maximum number of results to return
-            min_similarity: Minimum cosine similarity threshold (0-1). 
-                           Default 0.20 filters out weak matches.
-                           - 0.30+ = strong match (very relevant)
-                           - 0.20-0.30 = moderate match (somewhat relevant)
-                           - <0.20 = weak match (likely irrelevant noise)
-            return_scores: If True, return list of (photo_id, similarity) tuples
-            
+            min_similarity: Minimum cosine similarity threshold (0-1).
+                           Results below this threshold are filtered out.
+                           - 0.30+ = Strong match (very relevant)
+                           - 0.20-0.30 = Moderate match (somewhat relevant)
+                           - <0.20 = Weak match (filtered out as noise)
+        
         Returns:
-            List of photo IDs (or tuples if return_scores=True) above threshold,
-            sorted by similarity (highest first)
+            List of photo IDs that match the query above the similarity threshold
         """
+        import logging
+        
         query_embedding = self.image_embedder.embed_text(query_text)
         
-        # Get more candidates than k to filter by threshold
-        # Request 3x to have room after filtering
-        distances, photo_ids = self.index.search("image", query_embedding, k=k * 3)
+        # Get more candidates than k to account for filtering
+        # Request 3x candidates to have enough after threshold filtering
+        candidates_k = min(k * 3, 150)
+        scores, photo_ids = self.index.search("image", query_embedding, k=candidates_k)
         
-        # For cosine similarity with IndexFlatIP (inner product on normalized vectors):
-        # - distance IS the similarity score (higher = more similar)
-        # - Range is typically 0 to 1 for normalized vectors
-        # 
-        # Filter results by similarity threshold
+        # Filter by similarity threshold
+        # FAISS IndexFlatIP with normalized vectors returns cosine similarity directly
+        # The "distance" returned is actually the inner product = cosine similarity
+        # Range: -1 to 1, where 1 = identical, 0 = orthogonal, -1 = opposite
         filtered_results = []
-        for dist, pid in zip(distances, photo_ids):
+        for score, pid in zip(scores, photo_ids):
             if pid < 0:
                 continue
             
-            # The FAISS index uses IndexFlatIP with normalized vectors,
-            # so distance = cosine similarity (higher = more similar)
-            similarity = float(dist)
+            # Score IS the cosine similarity (inner product of normalized vectors)
+            similarity = float(score)
             
             if similarity >= min_similarity:
                 filtered_results.append((int(pid), similarity))
+                logging.info(f"CLIP match: photo_id={pid}, similarity={similarity:.3f}")
+            else:
+                logging.info(f"CLIP filtered out: photo_id={pid}, similarity={similarity:.3f} < {min_similarity}")
         
-        # Sort by similarity (highest first) and limit to k
+        # Sort by similarity (highest first) and return top k
         filtered_results.sort(key=lambda x: x[1], reverse=True)
-        filtered_results = filtered_results[:k]
         
-        if return_scores:
-            return filtered_results
-        else:
-            return [pid for pid, _ in filtered_results]
+        result_ids = [pid for pid, _ in filtered_results[:k]]
+        logging.info(f"CLIP search '{query_text}': {len(result_ids)} results above threshold {min_similarity} (from {candidates_k} candidates)")
+        
+        return result_ids
 
     async def search_similar_faces(self, face_id: int, k: int = 10) -> List[Dict]:
         """
