@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { peopleApi, Person, Photo } from "../services/api";
-import { Users, User, Edit2, Check, X, Trash2, Merge, UserX } from "lucide-react";
-import { Users, User, Edit2, Check, X, Trash2, UserPlus } from "lucide-react";
+import { Users, User, Edit2, Check, X, Trash2, Merge, UserX, UserPlus } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
 
@@ -94,6 +93,16 @@ const PeopleView: React.FC = () => {
   // Selection handlers
   const toggleSelection = (personId: number) => {
     setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(personId)) {
+        next.delete(personId);
+      } else {
+        next.add(personId);
+      }
+      return next;
+    });
+  };
+
   const handleDeletePerson = async (personId: number) => {
     try {
       setDeletingId(personId);
@@ -313,22 +322,7 @@ const PeopleView: React.FC = () => {
               People
             </h1>
           </div>
-          {!hasSelection && people.length > 1 && (
-            <button
-              onClick={selectAll}
-              className="text-sm text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary transition-colors font-medium"
-            >
-              Select all
-      <div className="mb-10">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-3">
-            <Users className="text-brand-primary" size={24} />
-            <h1 className="text-3xl font-black text-light-text-primary dark:text-dark-text-primary tracking-tight">
-              People
-            </h1>
-          </div>
-          
-          {/* Merge Mode Controls */}
+
           {mergeMode ? (
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">
@@ -355,17 +349,27 @@ const PeopleView: React.FC = () => {
               </button>
             </div>
           ) : (
-            <button
-              onClick={() => setMergeMode(true)}
-              className="px-4 py-2 bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-xl text-sm font-bold text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary hover:border-brand-primary transition-colors flex items-center gap-2"
-            >
-              <UserPlus size={16} />
-              Merge People
-            </button>
+            <div className="flex items-center gap-3">
+              {!hasSelection && people.length > 1 && (
+                <button
+                  onClick={selectAll}
+                  className="text-sm text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary transition-colors font-medium"
+                >
+                  Select all
+                </button>
+              )}
+              <button
+                onClick={() => setMergeMode(true)}
+                className="px-4 py-2 bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-xl text-sm font-bold text-light-text-secondary dark:text-dark-text-secondary hover:text-brand-primary hover:border-brand-primary transition-colors flex items-center gap-2"
+              >
+                <UserPlus size={16} />
+                Merge People
+              </button>
+            </div>
           )}
         </div>
         <p className="text-light-text-secondary dark:text-dark-text-secondary font-medium">
-          {mergeMode 
+          {mergeMode
             ? "Select people to merge together. The merged person will keep the name of the first named person."
             : "Automatically grouped face clusters from your entire collection."
           }
@@ -375,59 +379,56 @@ const PeopleView: React.FC = () => {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-6">
         {people.map((person) => {
           const isSelected = selectedIds.has(person.id);
+          const isSelectedForMerge = selectedForMerge.has(person.id);
+
           return (
-          <Card 
-            key={person.id} 
-            className={`p-4 group cursor-pointer relative ${isSelected ? "ring-4 ring-brand-primary" : ""}`}
-            hover={!editingId}
-            onClick={() => handlePersonClick(person)}
-          >
-            {/* Selection Checkbox */}
-            <div
-              className="absolute top-2 right-2 z-10"
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleSelection(person.id);
+            <Card
+              key={person.id}
+              className={`p-4 group cursor-pointer relative ${
+                mergeMode
+                  ? (isSelectedForMerge ? "ring-2 ring-brand-primary" : "")
+                  : (isSelected ? "ring-4 ring-brand-primary" : "")
+              }`}
+              hover={!editingId && !mergeMode}
+              onClick={() => {
+                if (mergeMode) {
+                  toggleMergeSelection(person.id);
+                } else {
+                  handlePersonClick(person);
+                }
               }}
             >
-              <div
-                className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
-                  isSelected
-                    ? "bg-brand-primary border-brand-primary"
-                    : "bg-white/80 dark:bg-dark-bg/80 border-light-border dark:border-dark-border opacity-0 group-hover:opacity-100"
-                }`}
-              >
-                {isSelected && <Check size={16} className="text-white dark:text-black" />}
-              </div>
-            </div>
-
-          const isSelectedForMerge = selectedForMerge.has(person.id);
-          
-          return (
-          <Card 
-            key={person.id} 
-            className={`p-4 group cursor-pointer relative ${isSelectedForMerge ? 'ring-2 ring-brand-primary' : ''}`}
-            hover={!editingId && !mergeMode}
-            onClick={() => {
-              if (mergeMode) {
-                toggleMergeSelection(person.id);
-              } else {
-                handlePersonClick(person);
-              }
-            }}
-          >
-            {/* Merge Mode Checkbox */}
-            {mergeMode && (
-              <div className="absolute top-2 right-2 z-10">
-                <div className={`w-6 h-6 rounded-lg flex items-center justify-center transition-colors ${
-                  isSelectedForMerge 
-                    ? 'bg-brand-primary text-white dark:text-black' 
-                    : 'bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border'
-                }`}>
-                  {isSelectedForMerge ? <Check size={14} /> : null}
+              {!mergeMode && (
+                <div
+                  className="absolute top-2 right-2 z-10"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelection(person.id);
+                  }}
+                >
+                  <div
+                    className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
+                      isSelected
+                        ? "bg-brand-primary border-brand-primary"
+                        : "bg-white/80 dark:bg-dark-bg/80 border-light-border dark:border-dark-border opacity-0 group-hover:opacity-100"
+                    }`}
+                  >
+                    {isSelected && <Check size={16} className="text-white dark:text-black" />}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+
+              {mergeMode && (
+                <div className="absolute top-2 right-2 z-10">
+                  <div className={`w-6 h-6 rounded-lg flex items-center justify-center transition-colors ${
+                    isSelectedForMerge
+                      ? "bg-brand-primary text-white dark:text-black"
+                      : "bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border"
+                  }`}>
+                    {isSelectedForMerge ? <Check size={14} /> : null}
+                  </div>
+                </div>
+              )}
             
             <div className="aspect-square bg-brand-primary/5 dark:bg-brand-primary/10 rounded-2xl mb-4 flex items-center justify-center text-brand-primary group-hover:scale-105 transition-transform duration-500 overflow-hidden">
               {person.thumbnail_url ? (
@@ -546,9 +547,8 @@ const PeopleView: React.FC = () => {
                 </div>
               </div>
             )}
-          </Card>
+            </Card>
           );
-        );
         })}
       </div>
 
