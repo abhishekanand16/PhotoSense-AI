@@ -32,47 +32,6 @@ import cv2
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-
-def validate_photo_path(photo_path: str) -> Path:
-    """
-    Validate and normalize a photo path for safety.
-    
-    Prevents:
-    - Path traversal attacks (../)
-    - Symlink attacks
-    - Non-file paths
-    
-    Returns:
-        Resolved absolute Path object
-        
-    Raises:
-        ValueError: If path is invalid or unsafe
-    """
-    try:
-        path = Path(photo_path)
-        
-        # Resolve to absolute path (this also normalizes .. and .)
-        resolved = path.resolve()
-        
-        # Check for symlink - only allow if it points to a regular file
-        if path.is_symlink():
-            target = resolved
-            if not target.is_file():
-                raise ValueError(f"Symlink does not point to a regular file: {photo_path}")
-        
-        # Must be a file (not directory, device, etc.)
-        if not resolved.is_file():
-            raise ValueError(f"Path is not a regular file: {photo_path}")
-        
-        # Check path doesn't contain null bytes (security)
-        if '\x00' in str(resolved):
-            raise ValueError(f"Path contains null bytes: {photo_path}")
-        
-        return resolved
-        
-    except (OSError, ValueError) as e:
-        raise ValueError(f"Invalid photo path '{photo_path}': {e}")
-
 from services.ml.detectors.face_detector import FaceDetector
 from services.ml.detectors.object_detector import ObjectDetector
 from services.ml.detectors.scene_detector import SceneDetector  # Places365 - now installed!
@@ -82,6 +41,7 @@ from services.ml.embeddings.face_embedding import FaceEmbedder
 from services.ml.embeddings.image_embedding import ImageEmbedder
 from services.ml.storage.faiss_index import FAISSIndex
 from services.ml.storage.sqlite_store import SQLiteStore
+from services.ml.utils.path_utils import validate_photo_path
 from services.ml.utils import extract_exif_metadata
 
 
@@ -577,34 +537,20 @@ class MLPipeline:
         # =====================================================================
         try:
             yolo_implications = SCENE_FUSION_CONFIG["yolo_scene_implications"]
-            
+
+            # object_ids are object table IDs; look up each category and apply implications.
             for obj_id in object_ids:
-                obj = self.store.get_objects_for_photo(obj_id)
-                # obj is a list, we need to check if any object implies a scene
-                # Actually, object_ids here are object IDs, so we need to look them up differently
-                pass
-            
-            # Instead, look up objects for the photo directly from results
-            # The object_ids passed are already the IDs of detected objects
-            for obj_id in object_ids:
-                # Get the object's category from the objects table
-                import sqlite3
-                conn = sqlite3.connect(self.store.db_path, timeout=30)
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT category FROM objects WHERE id = ?", (obj_id,))
-                row = cursor.fetchone()
-                conn.close()
-                
-                if row:
-                    category = row['category']
-                    # Check if this category implies any scene tags
-                    for pattern, implied_tags in yolo_implications.items():
-                        if pattern in category:
-                            for tag in implied_tags:
-                                if tag not in seen_tags:
-                                    all_tags.append((tag, 0.6, 'yolo'))  # Medium confidence
-                                    seen_tags.add(tag)
+                category = self.store.get_object_category(obj_id)
+                if not category:
+                    continue
+
+                # Check if this category implies any scene tags
+                for pattern, implied_tags in yolo_implications.items():
+                    if pattern in category:
+                        for tag in implied_tags:
+                            if tag not in seen_tags:
+                                all_tags.append((tag, 0.6, 'yolo'))  # Medium confidence
+                                seen_tags.add(tag)
         except Exception as e:
             logging.warning(f"YOLO scene implication failed: {e}")
         

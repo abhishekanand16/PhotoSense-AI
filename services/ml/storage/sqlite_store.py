@@ -599,6 +599,47 @@ class SQLiteStore:
         conn.close()
         return [dict(row) for row in rows]
 
+    def get_object_category(self, object_id: int) -> Optional[str]:
+        """Get an object's category by object ID."""
+        with self._get_connection(readonly=True) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT category FROM objects WHERE id = ?", (object_id,))
+            row = cursor.fetchone()
+            return row["category"] if row else None
+
+    def count_objects_by_category_like(self, like_pattern: str) -> Tuple[int, int]:
+        """
+        Count objects whose category matches a SQL LIKE pattern.
+
+        Returns:
+            (object_count, affected_photos)
+        """
+        with self._get_connection(readonly=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM objects WHERE category LIKE ?", (like_pattern,))
+            object_count = int(cursor.fetchone()[0] or 0)
+
+            cursor.execute(
+                "SELECT COUNT(DISTINCT photo_id) FROM objects WHERE category LIKE ?",
+                (like_pattern,),
+            )
+            affected_photos = int(cursor.fetchone()[0] or 0)
+
+            return object_count, affected_photos
+
+    def delete_objects_by_category_like(self, like_pattern: str) -> int:
+        """
+        Delete objects whose category matches a SQL LIKE pattern.
+
+        Returns:
+            Number of rows deleted
+        """
+        with self._transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM objects WHERE category LIKE ?", (like_pattern,))
+            return int(cursor.rowcount or 0)
+
     def add_scene(self, photo_id: int, scene_label: str, confidence: float) -> int:
         """Add a detected scene. Returns scene_id."""
         conn = sqlite3.connect(self.db_path, timeout=30)
