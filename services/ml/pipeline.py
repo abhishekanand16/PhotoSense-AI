@@ -435,6 +435,22 @@ class MLPipeline:
                     results["scenes"].append(tag)
             
             logging.info(f"Fused scene tags for {photo_path}: {results['scenes']}")
+
+            # Store Florence tags separately for precise object UI fallback
+            florence_prefix = "florence:"
+            stored_florence_tags = set()
+            for tag, confidence, source in fused_tags:
+                if source != "florence":
+                    continue
+                prefixed_tag = f"{florence_prefix}{tag}"
+                if prefixed_tag in stored_florence_tags:
+                    continue
+                self.store.add_scene(
+                    photo_id=photo_id,
+                    scene_label=prefixed_tag,
+                    confidence=confidence
+                )
+                stored_florence_tags.add(prefixed_tag)
             
         except Exception as e:
             logging.warning(f"Scene detection failed for {photo_path}: {e}")

@@ -5,7 +5,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException
 
-from services.api.models import ObjectResponse, PhotoResponse
+from services.api.models import CategorySummaryResponse, ObjectResponse, PhotoResponse
 from services.ml.storage.sqlite_store import SQLiteStore
 
 router = APIRouter(prefix="/objects", tags=["objects"])
@@ -31,6 +31,35 @@ async def list_categories():
                     continue
                 categories.add(category)
         return sorted(list(categories))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/categories/summary", response_model=List[CategorySummaryResponse])
+async def list_categories_summary():
+    """Get object categories with photo counts (excluding 'person' and 'other')."""
+    store = SQLiteStore()
+    try:
+        photos = store.get_all_photos()
+        category_photos = {}
+        for photo in photos:
+            objects = store.get_objects_for_photo(photo["id"])
+            for obj in objects:
+                category = obj["category"]
+                category_lower = category.lower()
+                if "person" in category_lower:
+                    continue
+                if category_lower == "other":
+                    continue
+                category_photos.setdefault(category, set()).add(photo["id"])
+
+        summaries = [
+            {"category": category, "photo_count": len(photo_ids)}
+            for category, photo_ids in category_photos.items()
+            if photo_ids
+        ]
+        summaries.sort(key=lambda item: (-item["photo_count"], item["category"]))
+        return summaries
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -46,6 +46,17 @@ export interface Person {
   thumbnail_url?: string;
 }
 
+export interface CategorySummary {
+  category: string;
+  photo_count: number;
+}
+
+export interface SceneSummary {
+  label: string;
+  photo_count: number;
+  avg_confidence: number;
+}
+
 export interface ScanJob {
   job_id: string;
   status: string;
@@ -136,8 +147,33 @@ export const objectsApi = {
     const response = await api.get<string[]>("/objects/categories");
     return response.data;
   },
+  getCategorySummary: async (): Promise<CategorySummary[]> => {
+    const response = await api.get<CategorySummary[]>("/objects/categories/summary");
+    return response.data;
+  },
   getPhotosByCategory: async (category: string): Promise<Photo[]> => {
     const response = await api.get<Photo[]>(`/objects/category/${category}/photos`);
+    return response.data;
+  },
+};
+
+export const scenesApi = {
+  getLabelSummary: async (options?: {
+    prefix?: string;
+    minPhotoCount?: number;
+    minAvgConfidence?: number;
+  }): Promise<SceneSummary[]> => {
+    const response = await api.get<SceneSummary[]>("/scenes/summary", {
+      params: {
+        prefix: options?.prefix,
+        min_photo_count: options?.minPhotoCount,
+        min_avg_confidence: options?.minAvgConfidence,
+      },
+    });
+    return response.data;
+  },
+  getPhotosByLabel: async (label: string): Promise<Photo[]> => {
+    const response = await api.get<Photo[]>(`/scenes/label/${label}/photos`);
     return response.data;
   },
 };

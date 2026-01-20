@@ -41,6 +41,13 @@ class ObjectResponse(BaseModel):
     bbox_h: int
 
 
+class CategorySummaryResponse(BaseModel):
+    """Summary of object categories with photo counts."""
+
+    category: str
+    photo_count: int
+
+
 class SceneResponse(BaseModel):
     """Scene detection response."""
 
@@ -48,6 +55,14 @@ class SceneResponse(BaseModel):
     photo_id: int
     scene_label: str
     confidence: float
+
+
+class SceneSummaryResponse(BaseModel):
+    """Summary of scene labels with photo counts."""
+
+    label: str
+    photo_count: int
+    avg_confidence: float
 
 
 class ScanRequest(BaseModel):
