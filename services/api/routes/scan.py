@@ -10,6 +10,7 @@ from typing import Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from services.api.models import GlobalScanStatusResponse, JobStatusResponse, ScanRequest, ScanResponse
+from services.ml.utils.path_utils import validate_folder_path as _validate_folder_path
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 
