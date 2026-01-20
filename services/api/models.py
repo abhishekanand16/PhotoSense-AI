@@ -106,3 +106,55 @@ class StatisticsResponse(BaseModel):
     total_objects: int
     total_people: int
     labeled_faces: int
+
+
+# =========================================================================
+# PET MODELS (parallel to people models)
+# =========================================================================
+
+class PetResponse(BaseModel):
+    """Pet identity response."""
+
+    id: int
+    cluster_id: Optional[int] = None
+    name: Optional[str] = None
+    species: Optional[str] = None
+    detection_count: int = 0
+
+
+class PetDetectionResponse(BaseModel):
+    """Pet detection response."""
+
+    id: int
+    photo_id: int
+    species: str
+    confidence: float
+    bbox_x: int
+    bbox_y: int
+    bbox_w: int
+    bbox_h: int
+    pet_id: Optional[int] = None
+
+
+class UpdatePetRequest(BaseModel):
+    """Request to update pet name."""
+
+    name: str
+
+
+class MergePetsRequest(BaseModel):
+    """Request to merge pets."""
+
+    source_pet_id: int
+    target_pet_id: int
+
+
+class SimilarPetResponse(BaseModel):
+    """Similar pet search result."""
+
+    pet_detection_id: int
+    photo_id: int
+    similarity: float
+    species: str
+    confidence: float
+    pet_id: Optional[int] = None

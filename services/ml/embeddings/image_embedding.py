@@ -74,3 +74,61 @@ class ImageEmbedder:
             logging.error(f"Text embedding failed for '{text}': {e}")
             # Return zero vector as fallback
             return np.zeros(self.embedding_dim, dtype=np.float32)
+
+    def embed_crop(self, image_crop: np.ndarray) -> np.ndarray:
+        """
+        Generate embedding for an image crop (numpy array BGR format from cv2).
+        Used for pet identity embeddings from cropped detection regions.
+        Returns: 768-dimensional embedding vector (CLIP-Large).
+        """
+        import cv2
+        self._load_model()
+
+        try:
+            # Convert BGR (cv2) to RGB (PIL)
+            if len(image_crop.shape) == 3 and image_crop.shape[2] == 3:
+                rgb_crop = cv2.cvtColor(image_crop, cv2.COLOR_BGR2RGB)
+            else:
+                rgb_crop = image_crop
+            
+            # Convert to PIL Image
+            pil_image = Image.fromarray(rgb_crop)
+            
+            inputs = self.processor(images=pil_image, return_tensors="pt").to(self.device)
+
+            with torch.no_grad():
+                image_features = self.model.get_image_features(**inputs)
+                embedding = image_features[0].cpu().numpy()
+
+            # Normalize
+            embedding = embedding / np.linalg.norm(embedding)
+            return embedding.astype(np.float32)
+        except Exception as e:
+            import logging
+            logging.error(f"Crop embedding failed: {e}")
+            # Return zero vector as fallback
+            return np.zeros(self.embedding_dim, dtype=np.float32)
+
+    def embed_texts_batch(self, texts: list) -> np.ndarray:
+        """
+        Generate embeddings for multiple text prompts (batch).
+        Used for CLIP zero-shot classification.
+        Returns: (N, 768) array of normalized embeddings.
+        """
+        self._load_model()
+
+        try:
+            inputs = self.processor(text=texts, return_tensors="pt", padding=True).to(self.device)
+
+            with torch.no_grad():
+                text_features = self.model.get_text_features(**inputs)
+                embeddings = text_features.cpu().numpy()
+
+            # Normalize each embedding
+            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+            embeddings = embeddings / norms
+            return embeddings.astype(np.float32)
+        except Exception as e:
+            import logging
+            logging.error(f"Batch text embedding failed: {e}")
+            return np.zeros((len(texts), self.embedding_dim), dtype=np.float32)

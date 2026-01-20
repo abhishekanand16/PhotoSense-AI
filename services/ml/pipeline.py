@@ -25,7 +25,7 @@ Consistency guarantees:
 
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -34,11 +34,38 @@ from sklearn.cluster import DBSCAN
 from services.ml.detectors.face_detector import FaceDetector
 from services.ml.detectors.object_detector import ObjectDetector
 from services.ml.detectors.scene_detector import SceneDetector  # Places365 - now installed!
+from services.ml.detectors.clip_scene_detector import CLIPSceneDetector  # CLIP zero-shot scenes
+from services.ml.detectors.florence_detector import FlorenceDetector  # Florence-2 vision-language
 from services.ml.embeddings.face_embedding import FaceEmbedder
 from services.ml.embeddings.image_embedding import ImageEmbedder
 from services.ml.storage.faiss_index import FAISSIndex
 from services.ml.storage.sqlite_store import SQLiteStore
 from services.ml.utils import extract_exif_metadata
+
+
+# Scene fusion configuration
+SCENE_FUSION_CONFIG = {
+    # Maximum number of final scene tags per image
+    "max_tags": 8,
+    # Minimum confidence for Places365 tags
+    "places365_min_confidence": 0.15,
+    # Minimum confidence for CLIP tags
+    "clip_min_confidence": 0.25,
+    # Minimum confidence for Florence-2 tags
+    "florence_min_confidence": 0.60,
+    # YOLO object categories that imply scene tags
+    "yolo_scene_implications": {
+        "animal:dog": ["outdoor"],
+        "animal:cat": ["indoor"],
+        "animal:bird": ["outdoor", "nature"],
+        "animal:horse": ["outdoor", "nature"],
+        "vehicle:car": ["outdoor", "street"],
+        "vehicle:boat": ["water", "outdoor"],
+        "sports:surfboard": ["beach", "water"],
+        "sports:skis": ["snow", "mountain"],
+        "plant:potted plant": ["indoor", "garden"],
+    },
+}
 
 
 # Clustering configuration (industry-aligned defaults)
@@ -95,7 +122,9 @@ class MLPipeline:
         # Initialize models (lazy loading)
         self.face_detector = FaceDetector()
         self.object_detector = ObjectDetector()
-        self.scene_detector = SceneDetector()  # Places365 - now installed!
+        self.scene_detector = SceneDetector()  # Places365
+        self.clip_scene_detector = CLIPSceneDetector()  # CLIP zero-shot
+        self.florence_detector = FlorenceDetector()  # Florence-2 vision-language
         self.face_embedder = FaceEmbedder()
         self.image_embedder = ImageEmbedder()
 
@@ -113,6 +142,12 @@ class MLPipeline:
         if not self.index.load_index("image"):
             self.index.create_index("image", dimension=768, metric="cosine")
             self.index.save_index("image")
+
+        # Pet embeddings: 768 dim (CLIP-Large), cosine similarity
+        # Separate index for pet identity clustering and similarity search
+        if not self.index.load_index("pet"):
+            self.index.create_index("pet", dimension=768, metric="cosine")
+            self.index.save_index("pet")
 
     async def import_photo(self, photo_path: str) -> Dict:
         """Import a photo with metadata only (no face/object detection).
@@ -173,13 +208,16 @@ class MLPipeline:
     async def process_photo_ml(self, photo_id: int, photo_path: str) -> Dict:
         """Process ML features for an already-imported photo (Phase 2).
         
-        This performs face detection, object detection, and embedding generation.
+        This performs face detection, object detection, pet detection, and embedding generation.
         Uses efficient detect_with_embeddings to do detection + embedding in one pass.
         """
+        import logging
+        
         results = {
             "photo_id": photo_id,
             "faces": [],
             "objects": [],
+            "pets": [],
             "image_embedding_id": None,
         }
 
@@ -238,8 +276,74 @@ class MLPipeline:
                 results["objects"].append(object_id)
         except Exception as e:
             # Object detection is optional - don't fail if it errors
-            import logging
             logging.warning(f"Object detection failed for {photo_path}: {e}")
+
+        # =====================================================================
+        # PET DETECTION & EMBEDDING (for pet identity grouping)
+        # =====================================================================
+        try:
+            # Detect animals using YOLO
+            animal_detections = self.object_detector.detect_animals(photo_path, min_confidence=0.4)
+            
+            if animal_detections:
+                # Load image for cropping
+                img = cv2.imread(photo_path)
+                if img is not None:
+                    img_height, img_width = img.shape[:2]
+                    
+                    for x, y, w, h, species, conf in animal_detections:
+                        # Add padding to crop (20% on each side)
+                        padding = 0.2
+                        pad_x = int(w * padding)
+                        pad_y = int(h * padding)
+                        
+                        crop_x1 = max(0, x - pad_x)
+                        crop_y1 = max(0, y - pad_y)
+                        crop_x2 = min(img_width, x + w + pad_x)
+                        crop_y2 = min(img_height, y + h + pad_y)
+                        
+                        # Crop pet region
+                        pet_crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
+                        
+                        # Skip tiny crops
+                        if pet_crop.shape[0] < 32 or pet_crop.shape[1] < 32:
+                            continue
+                        
+                        # Generate CLIP embedding for pet identity
+                        pet_embedding = self.image_embedder.embed_crop(pet_crop)
+                        
+                        # Skip if embedding failed (zero vector)
+                        if np.allclose(pet_embedding, 0):
+                            continue
+                        
+                        # Store pet detection in DB
+                        pet_detection_id = self.store.add_pet_detection(
+                            photo_id=photo_id,
+                            bbox_x=x,
+                            bbox_y=y,
+                            bbox_w=w,
+                            bbox_h=h,
+                            species=species,
+                            confidence=conf,
+                        )
+                        
+                        # Store embedding in SQLite
+                        self.store.store_pet_embedding(pet_detection_id, pet_embedding)
+                        
+                        # Update detection with embedding reference
+                        self.store.update_pet_detection_embedding(pet_detection_id, pet_detection_id)
+                        
+                        # Add to FAISS index for similarity search
+                        self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
+                        
+                        results["pets"].append(pet_detection_id)
+                    
+                    # Save FAISS index after batch of pets
+                    if results["pets"]:
+                        self.index.save_index("pet")
+                        
+        except Exception as e:
+            logging.warning(f"Pet detection failed for {photo_path}: {e}")
 
         # Generate image embedding (for semantic search)
         try:
@@ -249,38 +353,151 @@ class MLPipeline:
             results["image_embedding_id"] = photo_id
         except Exception as e:
             # Image embedding is optional
-            import logging
             logging.warning(f"Image embedding failed for {photo_path}: {e}")
 
-        # Detect scenes using Places365 (e.g., sunset, beach, mountain, etc.)
+        # =====================================================================
+        # FUSED SCENE DETECTION (Places365 + CLIP + Florence-2 + YOLO evidence)
+        # Industry-grade scene tagging similar to Google Photos / EYE
+        # =====================================================================
         results["scenes"] = []
         try:
-            scene_tags = self.scene_detector.get_all_scene_tags(photo_path)
-            for tag in scene_tags:
-                # Store with confidence 1.0 for simplified tags
-                scene_id = self.store.add_scene(
-                    photo_id=photo_id,
-                    scene_label=tag,
-                    confidence=1.0
-                )
-                results["scenes"].append(tag)
+            fused_tags = self._detect_scenes_fused(photo_path, results.get("objects", []))
             
-            # Also store the detailed scene detections
-            detailed_scenes = self.scene_detector.detect(photo_path, top_k=5)
-            for scene_label, confidence in detailed_scenes:
-                if confidence >= 0.1:  # Store high-confidence scenes
+            # Store fused tags (deduplicated, capped)
+            stored_tags = set()
+            for tag, confidence, source in fused_tags:
+                if tag not in stored_tags:
                     self.store.add_scene(
                         photo_id=photo_id,
-                        scene_label=scene_label,
+                        scene_label=tag,
                         confidence=confidence
                     )
+                    stored_tags.add(tag)
+                    results["scenes"].append(tag)
+            
+            logging.info(f"Fused scene tags for {photo_path}: {results['scenes']}")
+            
         except Exception as e:
-            # Scene detection is optional
-            import logging
             logging.warning(f"Scene detection failed for {photo_path}: {e}")
             results["scenes"] = []
 
         return results
+    
+    def _detect_scenes_fused(
+        self, 
+        image_path: str, 
+        object_ids: List[int]
+    ) -> List[Tuple[str, float, str]]:
+        """
+        Fused scene detection combining Places365, CLIP, Florence-2, and YOLO evidence.
+        
+        Args:
+            image_path: Path to image
+            object_ids: List of object IDs detected in this image
+            
+        Returns:
+            List of (tag, confidence, source) tuples, sorted by confidence
+            source is one of: 'places365', 'clip', 'florence', 'yolo'
+        """
+        import logging
+        
+        all_tags = []  # (tag, confidence, source)
+        seen_tags = set()
+        
+        # =====================================================================
+        # 1. Places365 Scene Detection
+        # =====================================================================
+        try:
+            # Get simplified category tags
+            places_tags = self.scene_detector.get_all_scene_tags(image_path)
+            for tag in places_tags:
+                if tag not in seen_tags:
+                    all_tags.append((tag, 0.8, 'places365'))  # High confidence for categorical match
+                    seen_tags.add(tag)
+            
+            # Get detailed detections with confidence
+            detailed = self.scene_detector.detect(image_path, top_k=10)
+            for scene_label, confidence in detailed:
+                if confidence >= SCENE_FUSION_CONFIG["places365_min_confidence"]:
+                    # Extract base tag from detailed label (e.g., "sky/sunset" -> "sunset")
+                    parts = scene_label.split('/')
+                    for part in parts:
+                        clean_tag = part.lower().replace('_', ' ').strip()
+                        if clean_tag and clean_tag not in seen_tags and len(clean_tag) > 2:
+                            all_tags.append((clean_tag, confidence, 'places365'))
+                            seen_tags.add(clean_tag)
+        except Exception as e:
+            logging.warning(f"Places365 scene detection failed: {e}")
+        
+        # =====================================================================
+        # 2. CLIP Zero-Shot Scene Detection
+        # =====================================================================
+        try:
+            clip_detections = self.clip_scene_detector.detect(image_path)
+            for tag, confidence in clip_detections:
+                if confidence >= SCENE_FUSION_CONFIG["clip_min_confidence"]:
+                    if tag not in seen_tags:
+                        all_tags.append((tag, confidence, 'clip'))
+                        seen_tags.add(tag)
+        except Exception as e:
+            logging.warning(f"CLIP scene detection failed: {e}")
+        
+        # =====================================================================
+        # 3. Florence-2 Vision-Language Tags
+        # =====================================================================
+        try:
+            florence_detections = self.florence_detector.get_scene_tags(image_path)
+            for tag, confidence in florence_detections:
+                if confidence >= SCENE_FUSION_CONFIG["florence_min_confidence"]:
+                    if tag not in seen_tags:
+                        all_tags.append((tag, confidence, 'florence'))
+                        seen_tags.add(tag)
+        except Exception as e:
+            logging.warning(f"Florence-2 scene detection failed: {e}")
+        
+        # =====================================================================
+        # 4. YOLO Object Evidence -> Scene Implications
+        # =====================================================================
+        try:
+            yolo_implications = SCENE_FUSION_CONFIG["yolo_scene_implications"]
+            
+            for obj_id in object_ids:
+                obj = self.store.get_objects_for_photo(obj_id)
+                # obj is a list, we need to check if any object implies a scene
+                # Actually, object_ids here are object IDs, so we need to look them up differently
+                pass
+            
+            # Instead, look up objects for the photo directly from results
+            # The object_ids passed are already the IDs of detected objects
+            for obj_id in object_ids:
+                # Get the object's category from the objects table
+                import sqlite3
+                conn = sqlite3.connect(self.store.db_path, timeout=30)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT category FROM objects WHERE id = ?", (obj_id,))
+                row = cursor.fetchone()
+                conn.close()
+                
+                if row:
+                    category = row['category']
+                    # Check if this category implies any scene tags
+                    for pattern, implied_tags in yolo_implications.items():
+                        if pattern in category:
+                            for tag in implied_tags:
+                                if tag not in seen_tags:
+                                    all_tags.append((tag, 0.6, 'yolo'))  # Medium confidence
+                                    seen_tags.add(tag)
+        except Exception as e:
+            logging.warning(f"YOLO scene implication failed: {e}")
+        
+        # =====================================================================
+        # 5. Fusion: Sort by confidence, cap at max_tags
+        # =====================================================================
+        all_tags.sort(key=lambda x: x[1], reverse=True)
+        
+        max_tags = SCENE_FUSION_CONFIG["max_tags"]
+        return all_tags[:max_tags]
 
     async def process_photo(self, photo_path: str) -> Dict:
         """
@@ -605,3 +822,243 @@ class MLPipeline:
             "new_clusters": len(unique_clusters),
             "noise": len(noise_face_ids)
         }
+
+    # =========================================================================
+    # PET CLUSTERING METHODS (parallel to face clustering)
+    # =========================================================================
+
+    # Pet clustering configuration (similar to face clustering)
+    PET_CLUSTERING_CONFIG = {
+        "min_confidence": 0.4,  # Lower threshold for pets
+        "eps": 0.4,  # Tighter clustering for pet identity (CLIP embeddings)
+        "min_samples": 2,  # Allow pairs
+        "keep_single_detection_clusters": False,  # Single-occurrence pets remain Unknown
+        "auto_recluster_threshold": 20,  # Fewer pets than faces typically
+    }
+
+    async def cluster_pets(
+        self,
+        eps: float = None,
+        min_samples: int = None,
+        min_confidence: float = None
+    ) -> Dict:
+        """
+        Cluster pet detections using DBSCAN with cosine distance.
+        Creates pet identities similar to how face clustering creates people.
+        
+        Edge case handling:
+        1. Single-detection pets: Remain "Unknown" (unlike faces)
+        2. Low-confidence detections: Excluded from clustering
+        3. Species-aware: Cluster within species (a dog can't cluster with a cat)
+        """
+        import logging
+        
+        # Use config defaults if not specified
+        eps = eps or self.PET_CLUSTERING_CONFIG["eps"]
+        min_samples = min_samples or self.PET_CLUSTERING_CONFIG["min_samples"]
+        min_confidence = min_confidence or self.PET_CLUSTERING_CONFIG["min_confidence"]
+        
+        # Get all pet embeddings from database
+        embeddings_data = self.store.get_all_pet_embeddings_with_detections()
+        
+        if len(embeddings_data) < min_samples:
+            logging.info(f"Not enough pet detections for clustering: {len(embeddings_data)} < {min_samples}")
+            return {
+                "status": "insufficient_data",
+                "clusters": 0,
+                "pets_clustered": 0,
+                "noise": 0,
+                "total": len(embeddings_data)
+            }
+
+        # Filter by confidence and group by species
+        species_groups = {}  # species -> [(detection_id, embedding)]
+        low_confidence_count = 0
+        
+        for detection_id, embedding in embeddings_data:
+            detection = self.store.get_pet_detection(detection_id)
+            if not detection:
+                continue
+            
+            if detection.get('confidence', 0) < min_confidence:
+                low_confidence_count += 1
+                # Clear assignments for low-confidence detections
+                self.store.update_pet_detection_cluster(detection_id, None)
+                self.store.update_pet_detection_pet(detection_id, None)
+                continue
+            
+            species = detection.get('species', 'unknown')
+            if species not in species_groups:
+                species_groups[species] = []
+            species_groups[species].append((detection_id, embedding))
+
+        total_clustered = 0
+        total_noise = 0
+        total_clusters = 0
+        new_pets_created = 0
+        existing_pets_reused = 0
+
+        # Cluster each species separately
+        for species, detections in species_groups.items():
+            if len(detections) < min_samples:
+                # Not enough detections of this species - mark as noise
+                for detection_id, _ in detections:
+                    self.store.update_pet_detection_cluster(detection_id, -1)
+                    self.store.update_pet_detection_pet(detection_id, None)
+                total_noise += len(detections)
+                continue
+            
+            detection_ids = [d[0] for d in detections]
+            embeddings = np.array([d[1] for d in detections])
+            
+            # Cluster using DBSCAN with cosine distance
+            clustering = DBSCAN(eps=eps, min_samples=min_samples, metric="cosine", n_jobs=-1).fit(embeddings)
+            
+            labels = clustering.labels_
+            unique_clusters = set(labels) - {-1}
+            
+            logging.info(f"Pet clustering for {species}: {len(unique_clusters)} clusters from {len(detection_ids)} detections")
+
+            # Use species-specific cluster offset to avoid collision
+            cluster_offset = total_clusters
+
+            # Assign cluster IDs to detections
+            for detection_id, cluster_label in zip(detection_ids, labels):
+                if cluster_label >= 0:
+                    # Use offset to make cluster_id unique across species
+                    global_cluster_id = cluster_offset + cluster_label
+                    self.store.update_pet_detection_cluster(detection_id, global_cluster_id)
+                else:
+                    self.store.update_pet_detection_cluster(detection_id, -1)
+
+            # Create pet entries for each cluster
+            for cluster_label in unique_clusters:
+                cluster_detection_count = sum(1 for label in labels if label == cluster_label)
+                
+                # Skip single-detection clusters (remain Unknown)
+                if cluster_detection_count == 1 and not self.PET_CLUSTERING_CONFIG["keep_single_detection_clusters"]:
+                    # Mark as noise
+                    for detection_id, label in zip(detection_ids, labels):
+                        if label == cluster_label:
+                            self.store.update_pet_detection_cluster(detection_id, -1)
+                            self.store.update_pet_detection_pet(detection_id, None)
+                    total_noise += 1
+                    continue
+                
+                global_cluster_id = cluster_offset + cluster_label
+                
+                # Check if pet with this cluster_id already exists
+                existing_pet = self.store.get_pet_by_cluster_id(global_cluster_id)
+                
+                if existing_pet:
+                    pet_id = existing_pet['id']
+                    existing_pets_reused += 1
+                else:
+                    # Create new pet identity
+                    pet_id = self.store.create_pet(
+                        cluster_id=global_cluster_id,
+                        name=None,  # User can name later
+                        species=species
+                    )
+                    new_pets_created += 1
+                    logging.info(f"Created new pet {pet_id} (species={species}) for cluster {global_cluster_id}")
+
+                # Assign detections to pet
+                for detection_id, label in zip(detection_ids, labels):
+                    if label == cluster_label:
+                        self.store.update_pet_detection_pet(detection_id, pet_id)
+                        total_clustered += 1
+
+            # Count noise for this species
+            species_noise = sum(1 for label in labels if label == -1)
+            total_noise += species_noise
+            
+            # Handle noise detections
+            for detection_id, label in zip(detection_ids, labels):
+                if label == -1:
+                    self.store.update_pet_detection_pet(detection_id, None)
+
+            total_clusters += len(unique_clusters)
+
+        return {
+            "status": "success",
+            "clusters": total_clusters,
+            "pets_clustered": total_clustered,
+            "noise": total_noise,
+            "low_confidence": low_confidence_count,
+            "new_pets_created": new_pets_created,
+            "existing_pets_reused": existing_pets_reused,
+            "total_detections": len(embeddings_data),
+            "species_processed": list(species_groups.keys())
+        }
+
+    async def search_similar_pets(self, pet_detection_id: int, k: int = 10) -> List[Dict]:
+        """
+        Search for similar pet detections using FAISS k-NN search.
+        Returns list of similar pet detections with similarity scores.
+        """
+        # Retrieve embedding for query pet detection
+        embedding = self.store.get_pet_embedding(pet_detection_id)
+        if embedding is None:
+            return []
+
+        # Search FAISS index
+        distances, similar_ids = self.index.search("pet", embedding, k=k + 1)  # +1 to exclude self
+        
+        # Build results with metadata
+        results = []
+        for distance, similar_id in zip(distances, similar_ids):
+            if similar_id < 0 or similar_id == pet_detection_id:
+                continue
+            
+            detection = self.store.get_pet_detection(int(similar_id))
+            if detection:
+                # Convert distance to similarity (for cosine: similarity = 1 - distance)
+                similarity = max(0.0, 1.0 - float(distance))
+                
+                results.append({
+                    'pet_detection_id': int(similar_id),
+                    'photo_id': detection['photo_id'],
+                    'similarity': similarity,
+                    'species': detection['species'],
+                    'confidence': detection['confidence'],
+                    'pet_id': detection.get('pet_id')
+                })
+        
+        return results[:k]
+
+    async def rebuild_pet_faiss_index(self) -> Dict:
+        """
+        Rebuild pet FAISS index from all pet embeddings in database.
+        """
+        import logging
+        
+        embeddings_data = self.store.get_all_pet_embeddings_with_detections()
+        
+        if len(embeddings_data) == 0:
+            logging.info("No pet embeddings to index")
+            return {"status": "empty", "count": 0}
+
+        # Recreate pet index
+        self.index.create_index("pet", dimension=768, metric="cosine")
+        
+        detection_ids = [did for did, _ in embeddings_data]
+        embeddings = np.array([emb for _, emb in embeddings_data])
+        
+        self.index.add_vectors("pet", embeddings, detection_ids)
+        self.index.save_index("pet")
+        
+        logging.info(f"Pet FAISS index rebuilt with {len(detection_ids)} embeddings")
+        
+        return {"status": "success", "count": len(detection_ids)}
+
+    async def should_auto_recluster_pets(self) -> bool:
+        """
+        Check if automatic pet reclustering should be triggered.
+        """
+        threshold = self.PET_CLUSTERING_CONFIG.get("auto_recluster_threshold")
+        if threshold is None:
+            return False
+        
+        unclustered = self.store.count_pet_detections_without_clusters()
+        return unclustered >= threshold
