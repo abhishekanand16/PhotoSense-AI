@@ -723,7 +723,7 @@ class MLPipeline:
         self, 
         query_text: str, 
         k: int = 10,
-        min_similarity: float = 0.26
+        min_similarity: float = 0.20
     ) -> List[int]:
         """
         Search for similar images using text query with similarity filtering.
@@ -733,10 +733,9 @@ class MLPipeline:
             k: Maximum number of results to return
             min_similarity: Minimum cosine similarity threshold (0-1).
                            Results below this threshold are filtered out.
-                           - 0.30+ = Strong semantic match (image clearly contains concept)
-                           - 0.26-0.30 = Good match (likely relevant)
-                           - 0.22-0.26 = Weak match (tangentially related)
-                           - <0.22 = No match (random/unrelated)
+                           - 0.30+ = Strong match (very relevant)
+                           - 0.20-0.30 = Moderate match (somewhat relevant)
+                           - <0.20 = Weak match (filtered out as noise)
         
         Returns:
             List of photo IDs that match the query above the similarity threshold
