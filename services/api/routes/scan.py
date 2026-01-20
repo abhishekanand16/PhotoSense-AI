@@ -206,24 +206,35 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         # ============================================
         # PHASE 2: AI Processing (face/object detection)
         # Progress: 50% - 100%
+        # OPTIMIZATION: Process in batches, defer FAISS saves
         # ============================================
         processed = 0
         total_faces = 0
         total_objects = 0
         total_to_process = len(imported_photos)
         
-        for idx, (photo_id, image_path) in enumerate(imported_photos):
-            try:
-                result = await pipeline.process_photo_ml(photo_id, image_path)
-                processed += 1
-                faces_found = len(result.get("faces", []))
-                objects_found = len(result.get("objects", []))
-                total_faces += faces_found
-                total_objects += objects_found
-                logging.info(f"Processed {image_path}: {faces_found} faces, {objects_found} objects")
-            except Exception as e:
-                logging.error(f"Failed to process ML for {image_path}: {str(e)}", exc_info=True)
+        # Batch size for optimal CPU throughput
+        BATCH_SIZE = 8
+        
+        for batch_start in range(0, total_to_process, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, total_to_process)
+            batch = imported_photos[batch_start:batch_end]
+            
+            for photo_id, image_path in batch:
+                try:
+                    result = await pipeline.process_photo_ml(photo_id, image_path)
+                    processed += 1
+                    faces_found = len(result.get("faces", []))
+                    objects_found = len(result.get("objects", []))
+                    total_faces += faces_found
+                    total_objects += objects_found
+                    logging.info(f"Processed {image_path}: {faces_found} faces, {objects_found} objects")
+                except Exception as e:
+                    logging.error(f"Failed to process ML for {image_path}: {str(e)}", exc_info=True)
 
+            # Save all dirty FAISS indices after each batch
+            pipeline.index.save_all_dirty()
+            
             # Progress for Phase 2: 50% to 100%
             progress = 0.5 + (idx + 1) / total_to_process * 0.5 if total_to_process > 0 else 1.0
             msg = f"Analyzing photos... {idx + 1}/{total_to_process}"
@@ -425,8 +436,32 @@ async def scan_faces_async(job_id: str):
             _update_job(job_id, progress=progress, message=msg)
             _update_global_state(scanned_photos=idx + 1, message=msg)
             
-            # Yield to event loop to allow status endpoint to respond
-            await asyncio.sleep(0)
+            for photo in batch:
+                try:
+                    photo_id = photo["id"]
+                    photo_path = photo["file_path"]
+                    
+                    # Check if file exists
+                    if not Path(photo_path).exists():
+                        logging.warning(f"Photo file not found: {photo_path}")
+                        continue
+                    
+                    # Run face/object detection
+                    result = await pipeline.process_photo_ml(photo_id, photo_path)
+                    processed += 1
+                    faces_found = len(result.get("faces", []))
+                    objects_found = len(result.get("objects", []))
+                    total_faces += faces_found
+                    total_objects += objects_found
+                    logging.info(f"Processed {photo_path}: {faces_found} faces, {objects_found} objects")
+                except Exception as e:
+                    logging.error(f"Failed to scan faces for photo {photo.get('id')}: {str(e)}", exc_info=True)
+
+            # Save all dirty FAISS indices after each batch
+            pipeline.index.save_all_dirty()
+            
+            progress = batch_end / total if total > 0 else 1.0
+            _update_job(job_id, progress=progress, message=f"Scanning faces... {batch_end}/{total}")
 
         # Run clustering
         _update_job(job_id, message="Organizing faces...")

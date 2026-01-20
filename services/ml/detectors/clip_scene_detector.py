@@ -1,9 +1,10 @@
 """CLIP-based zero-shot scene classification for scenery/environment recognition."""
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import logging
 
 import numpy as np
+from PIL import Image
 
 
 class CLIPSceneDetector:
@@ -215,12 +216,17 @@ class CLIPSceneDetector:
         
         return self._prompt_embeddings, self._tag_names
     
-    def detect(self, image_path: str) -> List[Tuple[str, float]]:
+    def detect(
+        self, 
+        image_path: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> List[Tuple[str, float]]:
         """
         Detect scene tags using CLIP zero-shot classification.
         
         Args:
-            image_path: Path to image file
+            image_path: Path to image file (for logging if image_rgb provided)
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
             
         Returns:
             List of (tag_name, confidence) tuples, sorted by confidence
@@ -229,8 +235,11 @@ class CLIPSceneDetector:
             embedder = self._get_embedder()
             prompt_embeddings, tag_names = self._get_prompt_embeddings()
             
-            # Get image embedding
-            image_embedding = embedder.embed(image_path)
+            # Get image embedding - use pre-decoded image if provided
+            if image_rgb is not None:
+                image_embedding = embedder.embed_pil(image_rgb)
+            else:
+                image_embedding = embedder.embed(image_path)
             
             if np.allclose(image_embedding, 0):
                 logging.warning(f"CLIP scene detection failed - zero embedding for {image_path}")

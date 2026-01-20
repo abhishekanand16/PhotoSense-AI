@@ -8,6 +8,10 @@ import numpy as np
 import insightface
 from insightface.app import FaceAnalysis
 
+# Apply fast face alignment patch BEFORE any InsightFace usage
+from services.ml.utils.face_align_patch import apply_patch
+apply_patch()
+
 
 class FaceDetector:
     """Face detection and alignment using InsightFace ONNX model."""
@@ -60,13 +64,23 @@ class FaceDetector:
 
         return results
     
-    def detect_with_embeddings(self, image_path: str) -> List[Dict]:
+    def detect_with_embeddings(
+        self, 
+        image_path: str,
+        image_bgr: Optional[np.ndarray] = None,
+        scale_factor: float = 1.0
+    ) -> List[Dict]:
         """
         Detect faces and generate embeddings in one pass.
         More efficient than separate detection + embedding.
         
+        Args:
+            image_path: Path to image (for logging purposes if image_bgr provided)
+            image_bgr: Optional pre-decoded BGR image (from ImageCache)
+            scale_factor: Scale factor to map bboxes back to original coordinates
+        
         Returns list of dicts with:
-        - bbox: (x, y, width, height)
+        - bbox: (x, y, width, height) in ORIGINAL image coordinates
         - confidence: detection confidence
         - embedding: 512-dim face embedding (aligned internally by InsightFace)
         - landmarks: facial landmarks (5 points: left_eye, right_eye, nose, mouth_left, mouth_right)
@@ -74,10 +88,15 @@ class FaceDetector:
         import logging
         
         self._load_model()
-        image = cv2.imread(image_path)
-        if image is None:
-            logging.warning(f"Could not read image: {image_path}")
-            return []
+        
+        # Use pre-decoded image if provided, otherwise load from disk
+        if image_bgr is not None:
+            image = image_bgr
+        else:
+            image = cv2.imread(image_path)
+            if image is None:
+                logging.warning(f"Could not read image: {image_path}")
+                return []
 
         try:
             faces = self.app.get(image)
@@ -86,6 +105,8 @@ class FaceDetector:
             return []
 
         results = []
+        inv_scale = 1.0 / scale_factor if scale_factor != 1.0 else 1.0
+        
         for face in faces:
             confidence = float(face.det_score)
             
@@ -94,6 +115,13 @@ class FaceDetector:
                 x1, y1, x2, y2 = bbox
                 width = x2 - x1
                 height = y2 - y1
+                
+                # Scale bbox back to original image coordinates
+                if scale_factor != 1.0:
+                    x1 = int(x1 * inv_scale)
+                    y1 = int(y1 * inv_scale)
+                    width = int(width * inv_scale)
+                    height = int(height * inv_scale)
                 
                 # Extract embedding (already aligned by InsightFace)
                 embedding = face.embedding
@@ -111,8 +139,13 @@ class FaceDetector:
                     logging.warning(f"Zero-norm embedding for face in {image_path}")
                     continue
                 
-                # Extract landmarks (5 key points)
-                landmarks = face.kps.astype(int).tolist() if hasattr(face, 'kps') else None
+                # Extract landmarks (5 key points) and scale them
+                landmarks = None
+                if hasattr(face, 'kps') and face.kps is not None:
+                    if scale_factor != 1.0:
+                        landmarks = [[int(x * inv_scale), int(y * inv_scale)] for x, y in face.kps]
+                    else:
+                        landmarks = face.kps.astype(int).tolist()
                 
                 results.append({
                     'bbox': (int(x1), int(y1), int(width), int(height)),

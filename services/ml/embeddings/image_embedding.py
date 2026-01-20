@@ -30,27 +30,46 @@ class ImageEmbedder:
 
     def embed(self, image_path: str) -> np.ndarray:
         """
-        Generate embedding for an image.
+        Generate embedding for an image from file.
         Returns: 768-dimensional embedding vector (CLIP-Large).
         """
         self._load_model()
 
         try:
             image = Image.open(image_path).convert("RGB")
-            inputs = self.processor(images=image, return_tensors="pt").to(self.device)
-
-            with torch.no_grad():
-                image_features = self.model.get_image_features(**inputs)
-                embedding = image_features[0].cpu().numpy()
-
-            # Normalize
-            embedding = embedding / np.linalg.norm(embedding)
-            return embedding.astype(np.float32)
+            return self._embed_pil_internal(image)
         except Exception as e:
             import logging
             logging.error(f"Image embedding failed for {image_path}: {e}")
             # Return zero vector as fallback
             return np.zeros(self.embedding_dim, dtype=np.float32)
+
+    def embed_pil(self, image: Image.Image) -> np.ndarray:
+        """
+        Generate embedding for a pre-decoded PIL Image.
+        Used when image is already in memory (from ImageCache).
+        Returns: 768-dimensional embedding vector (CLIP-Large).
+        """
+        self._load_model()
+
+        try:
+            return self._embed_pil_internal(image)
+        except Exception as e:
+            import logging
+            logging.error(f"PIL image embedding failed: {e}")
+            return np.zeros(self.embedding_dim, dtype=np.float32)
+
+    def _embed_pil_internal(self, image: Image.Image) -> np.ndarray:
+        """Internal method to embed a PIL image."""
+        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+
+        with torch.no_grad():
+            image_features = self.model.get_image_features(**inputs)
+            embedding = image_features[0].cpu().numpy()
+
+        # Normalize
+        embedding = embedding / np.linalg.norm(embedding)
+        return embedding.astype(np.float32)
 
     def embed_text(self, text: str) -> np.ndarray:
         """

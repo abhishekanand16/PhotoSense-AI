@@ -142,13 +142,19 @@ class FlorenceDetector:
             self.processor = None
             return False
     
-    def _run_task(self, image_path: str, task_prompt: str) -> str:
+    def _run_task(
+        self, 
+        image_path: str, 
+        task_prompt: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> str:
         """
         Run a Florence-2 task on an image.
         
         Args:
-            image_path: Path to image
+            image_path: Path to image (for logging if image_rgb provided)
             task_prompt: Task prompt (e.g., "<CAPTION>", "<DETAILED_CAPTION>")
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
         
         Returns:
             Generated text output
@@ -162,15 +168,18 @@ class FlorenceDetector:
             return ""
         
         try:
-            # Load image
-            image = Image.open(image_path).convert('RGB')
-            
-            # Resize large images to prevent memory issues
-            max_size = 1024
-            if max(image.size) > max_size:
-                ratio = max_size / max(image.size)
-                new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
-                image = image.resize(new_size, Image.Resampling.LANCZOS)
+            # Use pre-decoded image if provided, otherwise load from disk
+            if image_rgb is not None:
+                image = image_rgb
+            else:
+                image = Image.open(image_path).convert('RGB')
+                
+                # Resize large images to prevent memory issues
+                max_size = 1024
+                if max(image.size) > max_size:
+                    ratio = max_size / max(image.size)
+                    new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
             
             # Prepare inputs
             inputs = self.processor(
@@ -219,17 +228,22 @@ class FlorenceDetector:
             logging.error(f"Florence-2 task '{task_prompt}' failed for {image_path}: {e}")
             return ""
     
-    def get_caption(self, image_path: str) -> str:
+    def get_caption(
+        self, 
+        image_path: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> str:
         """
         Get short caption for an image.
         
         Args:
-            image_path: Path to image
+            image_path: Path to image (for logging if image_rgb provided)
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
         
         Returns:
             Short caption (1 sentence)
         """
-        caption = self._run_task(image_path, "<CAPTION>")
+        caption = self._run_task(image_path, "<CAPTION>", image_rgb=image_rgb)
         
         # Trim to reasonable length
         if len(caption) > 200:
@@ -237,17 +251,22 @@ class FlorenceDetector:
         
         return caption
     
-    def get_detailed_caption(self, image_path: str) -> str:
+    def get_detailed_caption(
+        self, 
+        image_path: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> str:
         """
         Get detailed caption for an image.
         
         Args:
-            image_path: Path to image
+            image_path: Path to image (for logging if image_rgb provided)
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
         
         Returns:
             Detailed caption (2-3 sentences)
         """
-        caption = self._run_task(image_path, "<DETAILED_CAPTION>")
+        caption = self._run_task(image_path, "<DETAILED_CAPTION>", image_rgb=image_rgb)
         
         # Trim to reasonable length
         if len(caption) > 500:
@@ -293,12 +312,17 @@ class FlorenceDetector:
         # Limit to MAX_TAGS
         return tags[:self.MAX_TAGS]
     
-    def detect(self, image_path: str) -> Tuple[str, List[str]]:
+    def detect(
+        self, 
+        image_path: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> Tuple[str, List[str]]:
         """
         Full detection: caption + tags.
         
         Args:
-            image_path: Path to image
+            image_path: Path to image (for logging if image_rgb provided)
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
         
         Returns:
             Tuple of (caption, tags)
@@ -307,10 +331,10 @@ class FlorenceDetector:
         """
         try:
             # Get detailed caption for better tag extraction
-            detailed_caption = self.get_detailed_caption(image_path)
+            detailed_caption = self.get_detailed_caption(image_path, image_rgb=image_rgb)
             
             # Get short caption for storage
-            short_caption = self.get_caption(image_path)
+            short_caption = self.get_caption(image_path, image_rgb=image_rgb)
             
             # Extract tags from detailed caption
             tags = self.extract_tags(detailed_caption)
@@ -323,12 +347,17 @@ class FlorenceDetector:
             logging.error(f"Florence-2 detection failed for {image_path}: {e}")
             return "", []
     
-    def get_scene_tags(self, image_path: str) -> List[Tuple[str, float]]:
+    def get_scene_tags(
+        self, 
+        image_path: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> List[Tuple[str, float]]:
         """
         Get scene tags with confidence scores (for pipeline integration).
         
         Args:
-            image_path: Path to image
+            image_path: Path to image (for logging if image_rgb provided)
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
         
         Returns:
             List of (tag, confidence) tuples
@@ -337,7 +366,7 @@ class FlorenceDetector:
         if not self._load_model():
             return []
         
-        _, tags = self.detect(image_path)
+        _, tags = self.detect(image_path, image_rgb=image_rgb)
         
         # Assign confidence based on position (earlier = more relevant)
         # Use higher confidence range since Florence-2 is high quality

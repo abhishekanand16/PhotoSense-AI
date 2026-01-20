@@ -1,12 +1,43 @@
 """FAISS vector index management for embeddings."""
 
+import hashlib
 import pickle
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import faiss
 import numpy as np
+
+
+class LRUCache:
+    """Simple LRU cache for search results."""
+    
+    def __init__(self, maxsize: int = 128):
+        self.maxsize = maxsize
+        self._cache: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()
+    
+    def get(self, key: str) -> Optional[Tuple]:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
+    
+    def put(self, key: str, value: Tuple) -> None:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            else:
+                if len(self._cache) >= self.maxsize:
+                    self._cache.popitem(last=False)
+            self._cache[key] = value
+    
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
 
 
 class FAISSIndex:
@@ -20,6 +51,10 @@ class FAISSIndex:
         self._id_maps: dict[str, dict[int, int]] = {}  # FAISS ID -> entity ID
         # Lock for serializing write operations (add, save, create)
         self._write_lock = threading.Lock()
+        # LRU cache for search results (per index type)
+        self._search_cache: dict[str, LRUCache] = {}
+        # Track dirty indices that need saving
+        self._dirty: set[str] = set()
 
     def _get_index_path(self, embedding_type: str) -> Path:
         """Get path for index file."""
@@ -42,6 +77,8 @@ class FAISSIndex:
 
             self._indices[embedding_type] = index
             self._id_maps[embedding_type] = {}
+            self._search_cache[embedding_type] = LRUCache(maxsize=128)
+            self._dirty.discard(embedding_type)
 
     def load_index(self, embedding_type: str) -> bool:
         """Load index from disk (thread-safe). Returns True if successful."""
@@ -59,13 +96,25 @@ class FAISSIndex:
                         self._id_maps[embedding_type] = pickle.load(f)
                 else:
                     self._id_maps[embedding_type] = {}
+                # Initialize cache for loaded index
+                self._search_cache[embedding_type] = LRUCache(maxsize=128)
+                self._dirty.discard(embedding_type)
                 return True
             except Exception:
                 return False
 
-    def save_index(self, embedding_type: str) -> None:
-        """Save index to disk (thread-safe)."""
+    def save_index(self, embedding_type: str, force: bool = False) -> None:
+        """Save index to disk (thread-safe).
+        
+        Args:
+            embedding_type: Type of index to save
+            force: If True, save even if not dirty. If False, only save if dirty.
+        """
         if embedding_type not in self._indices:
+            return
+        
+        # Skip if not dirty and not forced
+        if not force and embedding_type not in self._dirty:
             return
 
         with self._write_lock:
@@ -75,6 +124,9 @@ class FAISSIndex:
             faiss.write_index(self._indices[embedding_type], str(index_path))
             with open(id_map_path, "wb") as f:
                 pickle.dump(self._id_maps[embedding_type], f)
+            
+            # Mark as clean after save
+            self._dirty.discard(embedding_type)
 
     def add_vectors(
         self,
@@ -101,14 +153,27 @@ class FAISSIndex:
             # Map FAISS IDs to entity IDs
             for i, entity_id in enumerate(entity_ids):
                 id_map[start_id + i] = entity_id
+            
+            # Invalidate search cache when index changes
+            if embedding_type in self._search_cache:
+                self._search_cache[embedding_type].clear()
+            
+            # Mark index as dirty
+            self._dirty.add(embedding_type)
 
+    def _make_cache_key(self, query_vector: np.ndarray, k: int) -> str:
+        """Create a cache key from query vector and k."""
+        # Use hash of the vector bytes + k for cache key
+        vec_bytes = query_vector.tobytes()
+        return hashlib.md5(vec_bytes + str(k).encode()).hexdigest()
+    
     def search(
         self,
         embedding_type: str,
         query_vector: np.ndarray,
         k: int = 10,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Search for similar vectors. Returns (distances, entity_ids)."""
+        """Search for similar vectors with LRU caching. Returns (distances, entity_ids)."""
         if embedding_type not in self._indices:
             return np.array([]), np.array([])
 
@@ -118,32 +183,61 @@ class FAISSIndex:
         # Check if index is empty
         if index.ntotal == 0:
             return np.array([]), np.array([])
-
-        # Normalize for cosine similarity if needed
+        
+        # Prepare query vector (normalize for cosine)
+        query_vec = query_vector.astype(np.float32).flatten()
         if isinstance(index, faiss.IndexFlatIP):
-            query_vector = query_vector.copy()
-            faiss.normalize_L2(query_vector.reshape(1, -1))
-            query_vector = query_vector.flatten()
-
-        query_vector = query_vector.astype(np.float32).reshape(1, -1)
+            query_vec_normalized = query_vec.copy()
+            faiss.normalize_L2(query_vec_normalized.reshape(1, -1))
+            query_vec_normalized = query_vec_normalized.flatten()
+        else:
+            query_vec_normalized = query_vec
+        
+        # Check cache
+        cache = self._search_cache.get(embedding_type)
+        if cache is not None:
+            cache_key = self._make_cache_key(query_vec_normalized, k)
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
         
         # Limit k to available vectors
         actual_k = min(k, index.ntotal)
         if actual_k == 0:
             return np.array([]), np.array([])
-            
-        distances, faiss_ids = index.search(query_vector, actual_k)
+        
+        # Perform search
+        distances, faiss_ids = index.search(query_vec_normalized.reshape(1, -1), actual_k)
 
         # Convert FAISS IDs to entity IDs
         entity_ids = np.array([id_map.get(int(fid), -1) for fid in faiss_ids[0]])
+        
+        result = (distances[0], entity_ids)
+        
+        # Store in cache
+        if cache is not None:
+            cache.put(cache_key, result)
 
-        return distances[0], entity_ids
+        return result
 
     def get_index_size(self, embedding_type: str) -> int:
         """Get number of vectors in index."""
         if embedding_type not in self._indices:
             return 0
         return self._indices[embedding_type].ntotal
+
+    def save_all_dirty(self) -> int:
+        """Save all dirty indices to disk. Returns number of indices saved."""
+        saved_count = 0
+        for embedding_type in list(self._dirty):
+            self.save_index(embedding_type, force=True)
+            saved_count += 1
+        return saved_count
+    
+    def mark_dirty(self, embedding_type: str) -> None:
+        """Manually mark an index as dirty (needing save)."""
+        if embedding_type in self._indices:
+            self._dirty.add(embedding_type)
 
     def remove_vectors(self, embedding_type: str, entity_ids: List[int]) -> None:
         """
@@ -214,3 +308,10 @@ class FAISSIndex:
             
             # Replace old index with new one
             self._indices[embedding_type] = new_index
+            
+            # Invalidate search cache
+            if embedding_type in self._search_cache:
+                self._search_cache[embedding_type].clear()
+            
+            # Mark as dirty
+            self._dirty.add(embedding_type)

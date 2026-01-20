@@ -1,7 +1,7 @@
 """Scene detection using Places365-CNN."""
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import logging
 
 import torch
@@ -124,13 +124,19 @@ class SceneDetector:
             self.model = None
             self.labels = []
 
-    def detect(self, image_path: str, top_k: int = 5) -> List[Tuple[str, float]]:
+    def detect(
+        self, 
+        image_path: str, 
+        top_k: int = 5,
+        image_rgb: Optional[Image.Image] = None
+    ) -> List[Tuple[str, float]]:
         """
         Detect scenes in an image.
         
         Args:
-            image_path: Path to image file
+            image_path: Path to image file (for logging, if image_rgb provided)
             top_k: Number of top predictions to return
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
             
         Returns:
             List of (scene_label, confidence) tuples
@@ -143,8 +149,12 @@ class SceneDetector:
             return []
         
         try:
-            # Load and preprocess image
-            img = Image.open(image_path).convert('RGB')
+            # Use pre-decoded image if provided, otherwise load from disk
+            if image_rgb is not None:
+                img = image_rgb
+            else:
+                img = Image.open(image_path).convert('RGB')
+            
             img_tensor = self.transform(img).unsqueeze(0).to(self.device)
             
             # Get predictions
@@ -170,14 +180,22 @@ class SceneDetector:
             logging.error(f"Scene detection failed for {image_path}: {e}")
             return []
     
-    def get_primary_scene(self, image_path: str) -> Tuple[str, float]:
+    def get_primary_scene(
+        self, 
+        image_path: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> Tuple[str, float]:
         """
         Get the primary scene category for an image.
+        
+        Args:
+            image_path: Path to image file
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
         
         Returns:
             (scene_category, confidence) - e.g., ('sunset', 0.85)
         """
-        scenes = self.detect(image_path, top_k=10)
+        scenes = self.detect(image_path, top_k=10, image_rgb=image_rgb)
         
         if not scenes:
             return ('unknown', 0.0)
@@ -192,14 +210,22 @@ class SceneDetector:
         # If no match, return the highest confidence scene
         return (scenes[0][0].split('/')[0], scenes[0][1])
     
-    def get_all_scene_tags(self, image_path: str) -> List[str]:
+    def get_all_scene_tags(
+        self, 
+        image_path: str,
+        image_rgb: Optional[Image.Image] = None
+    ) -> List[str]:
         """
         Get all relevant scene tags for an image.
+        
+        Args:
+            image_path: Path to image file
+            image_rgb: Optional pre-decoded PIL RGB image (from ImageCache)
         
         Returns:
             List of scene category tags (e.g., ['sunset', 'beach', 'outdoor'])
         """
-        scenes = self.detect(image_path, top_k=10)
+        scenes = self.detect(image_path, top_k=10, image_rgb=image_rgb)
         
         if not scenes:
             return []
