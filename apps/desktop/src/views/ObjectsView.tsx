@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
-import { CategorySummary, objectsApi, Photo, scenesApi, SceneSummary } from "../services/api";
-import { Box, ChevronDown } from "lucide-react";
+import { CategorySummary, objectsApi, Photo, scenesApi, SceneSummary, tagsApi, TagSummary } from "../services/api";
+import { Box, ChevronDown, Tag } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
 
@@ -13,9 +13,10 @@ const FLORENCE_MIN_AVG_CONFIDENCE = 0.7;
 type UnifiedCategory = {
   id: string;
   label: string;
-  source: "object" | "scene";
+  source: "object" | "scene" | "custom";
   category?: string;
   sceneLabels?: string[];
+  customTag?: string;
   photoCount: number;
 };
 
@@ -118,16 +119,17 @@ const ObjectsView: React.FC = () => {
   const loadCategories = async () => {
     try {
       setLoading(true);
-      const [objectData, florenceData] = await Promise.all([
+      const [objectData, florenceData, customTagsData] = await Promise.all([
         objectsApi.getCategorySummary(),
         scenesApi.getLabelSummary({
           prefix: FLORENCE_TAG_PREFIX,
           minPhotoCount: FLORENCE_MIN_PHOTO_COUNT,
           minAvgConfidence: FLORENCE_MIN_AVG_CONFIDENCE,
         }),
+        tagsApi.getAllTags(),
       ]);
       const filteredObjects = objectData.filter((item) => item.photo_count > 0);
-      const grouped = buildGroupedCategories(filteredObjects, florenceData);
+      const grouped = buildGroupedCategories(filteredObjects, florenceData, customTagsData);
       setGroupedCategories(grouped);
 
       if (grouped.length > 0 && !selectedCategoryId) {
@@ -154,6 +156,11 @@ const ObjectsView: React.FC = () => {
         setPhotos(data);
         return;
       }
+      if (selection.source === "custom" && selection.customTag) {
+        const data = await tagsApi.getPhotosByTag(selection.customTag);
+        setPhotos(data);
+        return;
+      }
       setPhotos([]);
     } catch (error) {
       console.error("Failed to load photos for selection:", error);
@@ -171,7 +178,8 @@ const ObjectsView: React.FC = () => {
 
   const buildGroupedCategories = (
     objectItems: CategorySummary[],
-    florenceItems: SceneSummary[]
+    florenceItems: SceneSummary[],
+    customTags: TagSummary[] = []
   ): GroupedCategory[] => {
     const groupedObjects = objectItems.reduce((acc, item) => {
       const [group] = item.category.split(":");
@@ -205,7 +213,27 @@ const ObjectsView: React.FC = () => {
         ]
       : [];
 
+    // Build custom tags group (user-created tags)
+    const customTagItems: UnifiedCategory[] = customTags.map((tag) => ({
+      id: `custom:${tag.tag}`,
+      label: tag.tag.charAt(0).toUpperCase() + tag.tag.slice(1), // Capitalize first letter
+      source: "custom",
+      customTag: tag.tag,
+      photoCount: tag.photo_count,
+    }));
+
+    const customTagGroup: GroupedCategory | null = customTagItems.length > 0
+      ? {
+          key: "custom",
+          label: "Custom Tags",
+          items: customTagItems.sort((a, b) => b.photoCount - a.photoCount || a.label.localeCompare(b.label)),
+          totalCount: customTagItems.reduce((sum, item) => sum + item.photoCount, 0),
+        }
+      : null;
+
     const grouped = [
+      // Custom tags at the TOP (highest priority - user intent)
+      ...(customTagGroup ? [customTagGroup] : []),
       ...Object.values(groupedObjects).map((group) => ({
         ...group,
         items: [...group.items].sort((a, b) => b.photoCount - a.photoCount || a.label.localeCompare(b.label)),
@@ -213,7 +241,12 @@ const ObjectsView: React.FC = () => {
       ...groupedFlorenceTags,
     ];
 
-    return grouped.sort((a, b) => b.totalCount - a.totalCount || a.label.localeCompare(b.label));
+    // Sort all groups except custom (which stays at top)
+    const customGroup = grouped.find(g => g.key === "custom");
+    const otherGroups = grouped.filter(g => g.key !== "custom");
+    otherGroups.sort((a, b) => b.totalCount - a.totalCount || a.label.localeCompare(b.label));
+    
+    return customGroup ? [customGroup, ...otherGroups] : otherGroups;
   };
 
   const buildFlorenceTags = (
@@ -326,6 +359,9 @@ const ObjectsView: React.FC = () => {
     if (selectedCategory.source === "scene") {
       return `Nature • ${selectedCategory.label}`;
     }
+    if (selectedCategory.source === "custom") {
+      return `Custom • ${selectedCategory.label}`;
+    }
     return selectedCategory.label;
   }, [selectedCategory]);
 
@@ -397,13 +433,18 @@ const ObjectsView: React.FC = () => {
                 onClick={() => toggleGroup(group.key, group.items)}
                 className="w-full flex items-center justify-between text-left"
               >
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.15em] text-brand-primary">
-                    {group.label}
-                  </p>
-                  <p className="text-light-text-secondary dark:text-dark-text-secondary text-sm">
-                    {group.items.length} tag{group.items.length === 1 ? "" : "s"}
-                  </p>
+                <div className="flex items-center gap-2">
+                  {group.key === "custom" && (
+                    <Tag size={14} className="text-brand-primary" />
+                  )}
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.15em] text-brand-primary">
+                      {group.label}
+                    </p>
+                    <p className="text-light-text-secondary dark:text-dark-text-secondary text-sm">
+                      {group.items.length} tag{group.items.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
                 </div>
                 <ChevronDown
                   size={18}

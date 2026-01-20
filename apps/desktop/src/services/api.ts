@@ -102,6 +102,50 @@ export interface LocationStats {
   not_geocoded: number;
 }
 
+export interface TagSummary {
+  tag: string;
+  photo_count: number;
+}
+
+export interface PhotoMetadata {
+  photo_id: number;
+  file_info: {
+    name: string;
+    size?: number;
+    format: string;
+    width?: number;
+    height?: number;
+    path: string;
+  };
+  dates: {
+    date_taken?: string;
+    date_imported?: string;
+  };
+  camera: {
+    model?: string;
+  };
+  location?: {
+    city?: string;
+    region?: string;
+    country?: string;
+    latitude?: number;
+    longitude?: number;
+  };
+  people: Array<{
+    id: number;
+    name?: string;
+  }>;
+  objects: Array<{
+    category: string;
+    confidence?: number;
+  }>;
+  scenes: Array<{
+    label: string;
+    confidence?: number;
+  }>;
+  custom_tags: string[];
+}
+
 export const photosApi = {
   list: async (): Promise<Photo[]> => {
     const response = await api.get<Photo[]>("/photos");
@@ -109,6 +153,10 @@ export const photosApi = {
   },
   get: async (id: number): Promise<Photo> => {
     const response = await api.get<Photo>(`/photos/${id}`);
+    return response.data;
+  },
+  getMetadata: async (id: number): Promise<PhotoMetadata> => {
+    const response = await api.get<PhotoMetadata>(`/photos/${id}/metadata`);
     return response.data;
   },
   updateMetadata: async (): Promise<{ status: string; message: string }> => {
@@ -145,6 +193,33 @@ export const peopleApi = {
   merge: async (sourceId: number, targetId: number): Promise<void> => {
     await api.post("/people/merge", { source_person_id: sourceId, target_person_id: targetId });
   },
+  /** Merge multiple people into a single target person */
+  mergeMultiple: async (personIds: number[], targetPersonId: number, minConfidence: number = 0.5): Promise<{
+    status: string;
+    message: string;
+    persons_merged: number;
+    faces_merged: number;
+    target_person_id: number;
+  }> => {
+    const response = await api.post("/people/merge-multiple", {
+      person_ids: personIds,
+      target_person_id: targetPersonId,
+      min_confidence: minConfidence,
+    });
+    return response.data;
+  },
+  /** Delete a person (unassigns faces but keeps them) */
+  delete: async (personId: number): Promise<{ status: string; message: string }> => {
+    const response = await api.delete<{ status: string; message: string }>(`/people/${personId}`);
+    return response.data;
+  },
+  /** Delete a person AND all their faces completely */
+  deleteWithFaces: async (personId: number): Promise<{
+    status: string;
+    message: string;
+    faces_deleted: number;
+  }> => {
+    const response = await api.delete(`/people/${personId}/with-faces`);
   delete: async (personId: number): Promise<void> => {
     await api.delete(`/people/${personId}`);
   },
@@ -274,6 +349,50 @@ export const placesApi = {
   /** Get location statistics */
   getStats: async (): Promise<LocationStats> => {
     const response = await api.get<LocationStats>("/places/stats");
+    return response.data;
+  },
+};
+
+export const tagsApi = {
+  /** Get all custom tags with photo counts */
+  getAllTags: async (): Promise<TagSummary[]> => {
+    const response = await api.get<TagSummary[]>("/tags");
+    return response.data;
+  },
+
+  /** Get photos by tag */
+  getPhotosByTag: async (tag: string): Promise<Photo[]> => {
+    const response = await api.get<Photo[]>(`/tags/${encodeURIComponent(tag)}/photos`);
+    return response.data;
+  },
+
+  /** Get tags for a specific photo */
+  getPhotoTags: async (photoId: number): Promise<string[]> => {
+    const response = await api.get<string[]>(`/tags/photo/${photoId}`);
+    return response.data;
+  },
+
+  /** Add a tag to a photo */
+  addTag: async (photoId: number, tag: string): Promise<{ status: string; tag: string }> => {
+    const response = await api.post(`/tags/photo/${photoId}`, { tag });
+    return response.data;
+  },
+
+  /** Add multiple tags to a photo */
+  addTags: async (photoId: number, tags: string[]): Promise<{ status: string; added_tags: string[] }> => {
+    const response = await api.post(`/tags/photo/${photoId}/multiple`, { tags });
+    return response.data;
+  },
+
+  /** Remove a tag from a photo */
+  removeTag: async (photoId: number, tag: string): Promise<{ status: string; message: string }> => {
+    const response = await api.delete(`/tags/photo/${photoId}/${encodeURIComponent(tag)}`);
+    return response.data;
+  },
+
+  /** Remove all tags from a photo */
+  removeAllTags: async (photoId: number): Promise<{ status: string; deleted_count: number }> => {
+    const response = await api.delete(`/tags/photo/${photoId}`);
     return response.data;
   },
 };

@@ -24,6 +24,19 @@ MIN_CONFIDENCE = {
     "clip_similarity": 0.25, # CLIP semantic search - only when tag overlap exists
 }
 
+# Scoring weights (Florence-2 is primary source)
+# Custom tags have HIGHEST priority as they are user-intent signals
+SCORE_WEIGHTS = {
+    "custom_tag_exact": 15.0,   # Exact custom tag match - HIGHEST PRIORITY
+    "custom_tag_partial": 10.0, # Partial custom tag match - still high
+    "florence_exact": 10.0,     # Exact Florence-2 tag match (e.g., "moon" = "moon")
+    "florence_partial": 6.0,    # Partial match (e.g., "moon" in "crescent moon")
+    "location_exact": 8.0,      # Exact location match (e.g., "Bangalore" = "Bangalore")
+    "location_partial": 5.0,    # Partial location match (e.g., "goa" in "Goa, India")
+    "scene_exact": 4.0,         # Exact scene tag match
+    "object_match": 4.0,        # YOLO object match
+    "pet_match": 4.0,           # Pet detection match
+    "clip_semantic": 3.0,       # CLIP similarity score - increased importance
 # Source-aware scoring weights (normalized scale)
 # person/face=1.0, location=0.9, florence=0.8, object/pet=0.6, clip=0.4
 SOURCE_WEIGHTS = {
@@ -410,6 +423,55 @@ def search_by_location(store: SQLiteStore, query: str) -> Dict[int, Dict]:
     return results
 
 
+def search_by_custom_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
+    """
+    Search user-created custom tags.
+    
+    Custom tags have the HIGHEST priority because they represent
+    explicit user intent and organization. A user tagging a photo
+    "family vacation" means that's exactly what the photo is about.
+    
+    Returns dict mapping photo_id to match info.
+    """
+    results = {}
+    query_lower = query.lower().strip()
+    
+    # Search custom tags
+    tag_matches = store.search_tags_by_text(query_lower)
+    
+    for match in tag_matches:
+        photo_id = match["photo_id"]
+        tag = match["tag"]
+        match_type = match["match_type"]  # 'exact', 'partial', or 'word'
+        
+        if photo_id not in results:
+            results[photo_id] = {
+                "tag_matches": [],
+                "match_type": None,
+                "best_score": 0.0
+            }
+        
+        # Determine score based on match type
+        if match_type == "exact":
+            score = 1.0
+        elif match_type == "partial":
+            score = 0.8
+        else:
+            score = 0.6
+        
+        results[photo_id]["tag_matches"].append({
+            "tag": tag,
+            "match_type": match_type,
+            "score": score
+        })
+        
+        if score > results[photo_id]["best_score"]:
+            results[photo_id]["best_score"] = score
+            results[photo_id]["match_type"] = match_type
+    
+    return results
+
+
 async def search_by_clip(pipeline, query: str, existing_ids: Set[int]) -> Dict[int, float]:
     """
     CLIP semantic search - supporting signal only.
@@ -451,6 +513,8 @@ def calculate_final_score(
     pet_data: Dict,
     clip_similarity: float,
     location_data: Dict = None,
+    custom_tag_data: Dict = None
+) -> float:
     intent_boosts: Dict[str, float] = None,
     query: str = "",
 ) -> Tuple[float, Dict]:
@@ -463,6 +527,12 @@ def calculate_final_score(
     3. Penalize results matching via ONE weak signal only
     4. Apply intent boosts based on query type
     
+    Priority:
+    1. Custom user tags (HIGHEST - explicit user intent)
+    2. Florence-2 exact/partial matches (high weight)
+    3. Location matches (high weight for place-based searches)
+    4. Object/Pet detections  
+    5. CLIP semantic similarity (important for visual concepts)
     Returns:
         Tuple of (score, match_info dict for debugging)
     """
@@ -475,6 +545,16 @@ def calculate_final_score(
     all_matched_tags = []  # Collect all matched tags for generic check
     has_exact_match = False
     
+    # Custom user tags (HIGHEST PRIORITY)
+    if custom_tag_data and custom_tag_data.get("tag_matches"):
+        has_tag_match = True
+        for match in custom_tag_data.get("tag_matches", []):
+            if match["match_type"] == "exact":
+                score += SCORE_WEIGHTS["custom_tag_exact"] * match["score"]
+            else:
+                score += SCORE_WEIGHTS["custom_tag_partial"] * match["score"]
+    
+    # Florence-2 tag matches (PRIMARY)
     # ==================================================================
     # Florence-2 tag matches (weight: 0.8)
     # ==================================================================
@@ -597,6 +677,15 @@ def calculate_final_score(
 @router.post("", response_model=List[PhotoResponse])
 async def search_photos(request: SearchRequest):
     """
+    Search photos using multiple sources with intelligent scoring.
+    
+    Search priority (highest to lowest):
+    1. Custom user tags (explicit user intent)
+    2. Florence-2 rich tags (exact and partial matches)
+    3. Location names (city, region, country)
+    4. YOLO object detections
+    5. Pet detections  
+    6. CLIP semantic similarity (fallback)
     Search photos using Florence-2 tags as primary source with relevance tuning.
     
     Search priority:
@@ -628,6 +717,13 @@ async def search_photos(request: SearchRequest):
         logging.info(f"Search query: '{query}'")
         
         # ==================================================================
+        # STEP 1: Search custom user tags (HIGHEST PRIORITY)
+        # ==================================================================
+        custom_tag_results = search_by_custom_tags(store, query)
+        logging.info(f"Custom tag matches: {len(custom_tag_results)} photos")
+        
+        # ==================================================================
+        # STEP 2: Search Florence-2 tags (PRIMARY SOURCE)
         # STEP 0: Detect query intent for boosting
         # ==================================================================
         intent_boosts = detect_query_intent(query)
@@ -640,25 +736,28 @@ async def search_photos(request: SearchRequest):
         logging.info(f"Florence-2 matches: {len(florence_results)} photos")
         
         # ==================================================================
-        # STEP 2: Search by location names
+        # STEP 3: Search by location names
         # ==================================================================
         location_results = search_by_location(store, query)
         logging.info(f"Location matches: {len(location_results)} photos")
         
         # ==================================================================
-        # STEP 3: Search YOLO objects
+        # STEP 4: Search YOLO objects
         # ==================================================================
         object_results = search_by_objects(store, query)
         logging.info(f"Object matches: {len(object_results)} photos")
         
         # ==================================================================
-        # STEP 4: Search pet detections (if relevant)
+        # STEP 5: Search pet detections (if relevant)
         # ==================================================================
         pet_results = {}
         if any(kw in query.lower() for kw in PET_KEYWORDS):
             pet_results = search_by_pets(store, query)
             logging.info(f"Pet matches: {len(pet_results)} photos")
         
+        # Collect all candidate photo IDs
+        candidate_ids = (
+            set(custom_tag_results.keys()) |
         # Collect all tag-based candidate photo IDs
         tag_candidate_ids = (
             set(florence_results.keys()) | 
@@ -668,6 +767,7 @@ async def search_photos(request: SearchRequest):
         )
         
         # ==================================================================
+        # STEP 6: CLIP semantic search (fallback or enhancement)
         # STEP 5: CLIP semantic search (supporting signal)
         # ==================================================================
         clip_results = await search_by_clip(pipeline, query, tag_candidate_ids)
@@ -716,6 +816,7 @@ async def search_photos(request: SearchRequest):
         candidate_ids = tag_candidate_ids | set(clip_results.keys())
         
         # ==================================================================
+        # STEP 7: Calculate scores and rank
         # STEP 6: Calculate scores and rank with source-aware weighting
         # ==================================================================
         scored_photos = []
@@ -725,6 +826,7 @@ async def search_photos(request: SearchRequest):
             if not photo:
                 continue
             
+            custom_tag_data = custom_tag_results.get(photo_id)
             florence_data = florence_results.get(photo_id)
             location_data = location_results.get(photo_id)
             object_data = object_results.get(photo_id)
@@ -738,6 +840,7 @@ async def search_photos(request: SearchRequest):
                 pet_data=pet_data,
                 clip_similarity=clip_sim,
                 location_data=location_data,
+                custom_tag_data=custom_tag_data
                 intent_boosts=intent_boosts,
                 query=query,
             )
@@ -749,6 +852,20 @@ async def search_photos(request: SearchRequest):
             scored_photos.append((score, photo, match_info))
             
             # Log what matched for debugging
+            matches = []
+            if custom_tag_data and custom_tag_data.get("tag_matches"):
+                matches.append(f"custom_tags:{len(custom_tag_data['tag_matches'])}")
+            if florence_data and florence_data.get("florence_matches"):
+                matches.append(f"florence:{len(florence_data['florence_matches'])}")
+            if location_data and location_data.get("location_matches"):
+                matches.append(f"location:{len(location_data['location_matches'])}")
+            if object_data and object_data.get("object_matches"):
+                matches.append(f"objects:{len(object_data['object_matches'])}")
+            if pet_data and pet_data.get("pet_matches"):
+                matches.append(f"pets:{len(pet_data['pet_matches'])}")
+            if clip_sim > 0:
+                matches.append(f"clip:{clip_sim:.2f}")
+            logging.info(f"Photo {photo_id}: score={score:.2f} [{', '.join(matches)}]")
             sources_str = ",".join(match_info["sources"])
             logging.info(
                 f"Photo {photo_id}: score={score:.3f} "

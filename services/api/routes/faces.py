@@ -11,9 +11,11 @@ Provides granular control over individual face detections:
 These endpoints complement the people.py routes which manage identities.
 """
 
+import logging
 from typing import List
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from services.ml.pipeline import MLPipeline
 from services.ml.storage.sqlite_store import SQLiteStore
@@ -21,7 +23,20 @@ from services.ml.storage.sqlite_store import SQLiteStore
 router = APIRouter(prefix="/faces", tags=["faces"])
 
 
+class DeleteMultipleFacesRequest(BaseModel):
+    """Request to delete multiple faces."""
+    face_ids: List[int]
+    rebuild_index: bool = True  # Rebuild FAISS after deletion
+
+
 @router.delete("/{face_id}")
+async def delete_face(face_id: int, rebuild_index: bool = False):
+    """
+    Delete a specific face detection.
+    
+    Args:
+        face_id: ID of the face to delete
+        rebuild_index: If True, rebuild FAISS index after deletion (slower but ensures consistency)
 async def delete_face(face_id: int):
     """
     Delete a specific face detection.
@@ -34,6 +49,20 @@ async def delete_face(face_id: int):
         if result["status"] == "not_found":
             raise HTTPException(status_code=404, detail="Face not found")
         
+        # Optionally rebuild FAISS index
+        if rebuild_index:
+            try:
+                rebuild_result = await pipeline.rebuild_faiss_index()
+                logging.info(f"FAISS index rebuilt after face deletion: {rebuild_result}")
+            except Exception as e:
+                logging.warning(f"FAISS rebuild failed: {str(e)}")
+        
+        return {
+            "status": "success",
+            "message": "Face deleted successfully",
+            "face_id": face_id,
+            "index_rebuilt": rebuild_index,
+        }
         message = "Face deleted successfully"
         if result.get("person_cleaned_up"):
             message += " (person with no remaining faces was also deleted)"
@@ -41,6 +70,55 @@ async def delete_face(face_id: int):
         return {"status": "success", "message": message}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/delete-multiple")
+async def delete_multiple_faces(request: DeleteMultipleFacesRequest):
+    """
+    Delete multiple face detections at once.
+    
+    More efficient than deleting one by one when cleaning up
+    multiple incorrect detections.
+    """
+    try:
+        store = SQLiteStore()
+        pipeline = MLPipeline()
+        
+        deleted_count = 0
+        not_found = []
+        errors = []
+        
+        for face_id in request.face_ids:
+            try:
+                result = await pipeline.delete_face(face_id)
+                if result["status"] == "not_found":
+                    not_found.append(face_id)
+                else:
+                    deleted_count += 1
+            except Exception as e:
+                logging.error(f"Failed to delete face {face_id}: {str(e)}")
+                errors.append(face_id)
+        
+        # Rebuild FAISS index once at the end
+        index_rebuilt = False
+        if request.rebuild_index and deleted_count > 0:
+            try:
+                rebuild_result = await pipeline.rebuild_faiss_index()
+                index_rebuilt = True
+                logging.info(f"FAISS index rebuilt after batch deletion: {rebuild_result}")
+            except Exception as e:
+                logging.warning(f"FAISS rebuild failed: {str(e)}")
+        
+        return {
+            "status": "success",
+            "deleted_count": deleted_count,
+            "not_found": not_found,
+            "errors": errors,
+            "index_rebuilt": index_rebuilt,
+            "message": f"Deleted {deleted_count} faces",
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

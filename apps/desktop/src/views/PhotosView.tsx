@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { photosApi, Photo } from "../services/api";
-import { Image as ImageIcon, Calendar, Trash2, Check } from "lucide-react";
+import { Image as ImageIcon, Calendar, Trash2, Check, Info } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
+import MetadataPanel from "../components/MetadataPanel";
 
 const PhotosView: React.FC = () => {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -11,6 +12,7 @@ const PhotosView: React.FC = () => {
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
+  const [metadataPhotoId, setMetadataPhotoId] = useState<number | null>(null);
 
   useEffect(() => {
     loadPhotos();
@@ -145,10 +147,10 @@ const PhotosView: React.FC = () => {
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {/* Selection Toolbar */}
+      {/* Selection Toolbar - positioned within the main content area (accounting for sidebar w-72 = 288px) */}
       {hasSelection && (
-        <div className="fixed top-24 left-0 right-0 z-50 px-8">
-          <div className="bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-2xl shadow-lg p-4 flex items-center justify-between">
+        <div className="fixed top-24 left-72 right-0 z-50 px-8">
+          <div className="bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-2xl shadow-lg p-4 flex items-center justify-between max-w-[1600px] mx-auto">
             <div className="flex items-center gap-4">
               <span className="text-sm font-bold text-light-text-primary dark:text-dark-text-primary">
                 {selectedIds.size} photo{selectedIds.size !== 1 ? "s" : ""} selected
@@ -248,6 +250,17 @@ const PhotosView: React.FC = () => {
                       {isSelected && <Check size={16} className="text-white" />}
                     </div>
                   </div>
+                  {/* Info button (visible on hover) */}
+                  <button
+                    className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brand-primary transition-all"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMetadataPhotoId(photo.id);
+                    }}
+                    title="View photo info"
+                  >
+                    <Info size={14} />
+                  </button>
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4">
                     <span className="text-white text-[10px] font-bold uppercase tracking-wider truncate w-full">
                       {photo.file_path.split('/').pop()}
@@ -271,14 +284,31 @@ const PhotosView: React.FC = () => {
               alt={selectedPhoto.file_path}
               className="max-w-full max-h-[90vh] object-contain rounded-3xl shadow-2xl"
             />
+            {/* Close button */}
             <button
               onClick={() => setSelectedPhoto(null)}
               className="absolute -top-4 -right-4 w-12 h-12 bg-white text-black rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform font-bold"
             >
               ✕
             </button>
+            {/* Info button */}
+            <button
+              onClick={() => setMetadataPhotoId(selectedPhoto.id)}
+              className="absolute -top-4 right-12 w-12 h-12 bg-brand-primary text-white dark:text-black rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform"
+              title="View photo info"
+            >
+              <Info size={20} />
+            </button>
           </div>
         </div>
+      )}
+
+      {/* Metadata Panel */}
+      {metadataPhotoId && (
+        <MetadataPanel
+          photoId={metadataPhotoId}
+          onClose={() => setMetadataPhotoId(null)}
+        />
       )}
     </div>
   );

@@ -9,7 +9,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from services.api.models import MergePeopleRequest, PersonResponse, PhotoResponse, UpdatePersonRequest
+from services.api.models import MergePeopleRequest, MergeMultiplePeopleRequest, PersonResponse, PhotoResponse, UpdatePersonRequest
 from services.ml.storage.sqlite_store import SQLiteStore
 
 router = APIRouter(prefix="/people", tags=["people"])
@@ -113,10 +113,99 @@ async def merge_people(request: MergePeopleRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/merge-multiple")
+async def merge_multiple_people(request: MergeMultiplePeopleRequest):
+    """
+    Merge multiple people into a single target person.
+    
+    This is the primary endpoint for face management. When merging:
+    1. All faces from person_ids are reassigned to target_person_id
+    2. Source person records are deleted
+    3. Embeddings remain intact under the merged identity
+    4. Future scans will auto-assign similar faces to this identity
+    
+    Args:
+        person_ids: List of person IDs to merge (will be deleted)
+        target_person_id: The person to merge all others into (kept)
+        min_confidence: Minimum face confidence threshold (default 0.5)
+    
+    Returns:
+        Summary of merge operation with face counts
+    """
+    import logging
+    
+    store = SQLiteStore()
+    try:
+        # Validate target exists
+        target_person = store.get_person(request.target_person_id)
+        if not target_person:
+            raise HTTPException(status_code=404, detail=f"Target person {request.target_person_id} not found")
+        
+        # Validate person_ids don't include target
+        if request.target_person_id in request.person_ids:
+            raise HTTPException(status_code=400, detail="Target person cannot be in the merge list")
+        
+        # Validate all source persons exist
+        source_persons = []
+        for person_id in request.person_ids:
+            person = store.get_person(person_id)
+            if not person:
+                raise HTTPException(status_code=404, detail=f"Source person {person_id} not found")
+            source_persons.append(person)
+        
+        total_faces_merged = 0
+        low_confidence_skipped = 0
+        persons_merged = 0
+        
+        for person_id in request.person_ids:
+            # Get faces for this person
+            faces = store.get_faces_for_person(person_id)
+            
+            # Filter by confidence threshold
+            high_conf_face_ids = []
+            for face in faces:
+                if face.get("confidence", 0) >= request.min_confidence:
+                    high_conf_face_ids.append(face["id"])
+                else:
+                    low_confidence_skipped += 1
+            
+            # Reassign faces to target person
+            if high_conf_face_ids:
+                store.update_faces_person(high_conf_face_ids, request.target_person_id)
+                total_faces_merged += len(high_conf_face_ids)
+            
+            # Delete the source person record
+            store.delete_person(person_id)
+            persons_merged += 1
+            
+            logging.info(f"Merged person {person_id} ({len(high_conf_face_ids)} faces) into {request.target_person_id}")
+        
+        # Get updated target face count
+        target_faces = store.get_faces_for_person(request.target_person_id)
+        unique_photos = {f["photo_id"] for f in target_faces}
+        
+        return {
+            "status": "success",
+            "message": f"Merged {persons_merged} people into person {request.target_person_id}",
+            "persons_merged": persons_merged,
+            "faces_merged": total_faces_merged,
+            "low_confidence_skipped": low_confidence_skipped,
+            "target_person_id": request.target_person_id,
+            "target_total_faces": len(target_faces),
+            "target_unique_photos": len(unique_photos),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Multi-merge failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/{person_id}")
 async def delete_person(person_id: int):
     """
     Delete a person and unassign all their faces.
+    Faces remain in the database but are unassigned (person_id = NULL).
     People can be deleted regardless of whether they have a name assigned.
     """
     store = SQLiteStore()
@@ -125,6 +214,62 @@ async def delete_person(person_id: int):
         if not deleted:
             raise HTTPException(status_code=404, detail="Person not found")
         return {"status": "success", "message": "Person deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{person_id}/with-faces")
+async def delete_person_with_faces(person_id: int):
+    """
+    Delete a person AND all their faces from the database.
+    
+    This is a complete removal:
+    1. All face records for this person are deleted
+    2. All face embeddings are deleted from DB
+    3. The person record is deleted
+    4. FAISS index is rebuilt automatically
+    
+    Use this for removing incorrectly detected faces or unwanted identities.
+    """
+    import logging
+    
+    store = SQLiteStore()
+    try:
+        # Verify person exists
+        person = store.get_person(person_id)
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+        
+        # Get all faces for this person
+        faces = store.get_faces_for_person(person_id)
+        face_ids = [f["id"] for f in faces]
+        
+        # Delete all faces (this also deletes embeddings from DB)
+        deleted_faces = 0
+        for face_id in face_ids:
+            if store.delete_face(face_id):
+                deleted_faces += 1
+        
+        # Delete the person record
+        store.delete_person(person_id)
+        
+        # Rebuild FAISS index to remove deleted embeddings
+        try:
+            from services.ml.pipeline import MLPipeline
+            pipeline = MLPipeline()
+            rebuild_result = await pipeline.rebuild_faiss_index()
+            logging.info(f"FAISS index rebuilt: {rebuild_result}")
+        except Exception as e:
+            logging.warning(f"FAISS rebuild failed (can be done manually): {str(e)}")
+        
+        return {
+            "status": "success",
+            "message": f"Person {person_id} and {deleted_faces} faces deleted",
+            "person_id": person_id,
+            "faces_deleted": deleted_faces,
+        }
     except HTTPException:
         raise
     except Exception as e:
