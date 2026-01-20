@@ -121,23 +121,71 @@ class MLPipeline:
         index_dir: str = "data/indices",
         cache_dir: str = "data/cache",
     ):
-        """Initialize ML pipeline."""
+        """Initialize ML pipeline with lazy model loading for fast startup."""
         self.store = SQLiteStore(db_path)
         self.index = FAISSIndex(index_dir)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize models (lazy loading)
-        self.face_detector = FaceDetector()
-        self.object_detector = ObjectDetector()
-        self.scene_detector = SceneDetector()  # Places365
-        self.clip_scene_detector = CLIPSceneDetector()  # CLIP zero-shot
-        self.florence_detector = FlorenceDetector()  # Florence-2 vision-language
-        self.face_embedder = FaceEmbedder()
-        self.image_embedder = ImageEmbedder()
+        # ===================================================================
+        # LAZY MODEL LOADING for fast startup
+        # Face detector loads immediately (needed for basic processing)
+        # Heavy models (CLIP, Florence, Places365) are deferred
+        # ===================================================================
+        
+        # Essential models - load immediately (lightweight)
+        self._face_detector = FaceDetector()
+        self._object_detector = ObjectDetector()
+        self._face_embedder = FaceEmbedder()
+        
+        # Deferred models - load on first use (heavyweight)
+        self._scene_detector: Optional[SceneDetector] = None
+        self._clip_scene_detector: Optional[CLIPSceneDetector] = None
+        self._florence_detector: Optional[FlorenceDetector] = None
+        self._image_embedder: Optional[ImageEmbedder] = None
 
         # Load or create indices
         self._init_indices()
+    
+    # =========================================================================
+    # LAZY LOADING PROPERTIES - Load heavy models on first access
+    # =========================================================================
+    
+    @property
+    def face_detector(self) -> FaceDetector:
+        return self._face_detector
+    
+    @property
+    def object_detector(self) -> ObjectDetector:
+        return self._object_detector
+    
+    @property
+    def face_embedder(self) -> FaceEmbedder:
+        return self._face_embedder
+    
+    @property
+    def scene_detector(self) -> SceneDetector:
+        if self._scene_detector is None:
+            self._scene_detector = SceneDetector()
+        return self._scene_detector
+    
+    @property
+    def clip_scene_detector(self) -> CLIPSceneDetector:
+        if self._clip_scene_detector is None:
+            self._clip_scene_detector = CLIPSceneDetector()
+        return self._clip_scene_detector
+    
+    @property
+    def florence_detector(self) -> FlorenceDetector:
+        if self._florence_detector is None:
+            self._florence_detector = FlorenceDetector()
+        return self._florence_detector
+    
+    @property
+    def image_embedder(self) -> ImageEmbedder:
+        if self._image_embedder is None:
+            self._image_embedder = ImageEmbedder()
+        return self._image_embedder
 
     def _init_indices(self) -> None:
         """Initialize FAISS indices."""
@@ -244,8 +292,11 @@ class MLPipeline:
         
         This performs face detection, object detection, pet detection, and embedding generation.
         Uses efficient detect_with_embeddings to do detection + embedding in one pass.
+        
+        OPTIMIZATION: Single image decode shared across all ML models via ImageCache.
         """
         import logging
+        from services.ml.utils.image_cache import get_image_cache
         
         results = {
             "photo_id": photo_id,
@@ -263,8 +314,33 @@ class MLPipeline:
             logging.error(f"Invalid photo path: {e}")
             return {"status": "error", "reason": str(e)}
 
-        # Detect faces AND generate embeddings in one pass (more efficient)
-        face_detections = self.face_detector.detect_with_embeddings(photo_path)
+        # =======================================================================
+        # SINGLE DECODE: Load and cache image once, share across all ML models
+        # =======================================================================
+        image_cache = get_image_cache()
+        cached = image_cache.decode_image(photo_path)
+        
+        if cached is None:
+            logging.error(f"Could not decode image: {photo_path}")
+            return {"status": "error", "reason": "decode_failed"}
+        
+        # Extract cached images and scale factors
+        face_image = cached['face_bgr']
+        face_scale = cached['scale_factors']['face']
+        ml_image_bgr = cached['ml_bgr']
+        ml_image_rgb = cached['ml_rgb']
+        ml_scale = cached['scale_factors']['ml']
+        florence_image = cached['florence_rgb']
+        original_bgr = cached['original_bgr']
+
+        # =======================================================================
+        # FACE DETECTION with pre-resized image
+        # =======================================================================
+        face_detections = self.face_detector.detect_with_embeddings(
+            photo_path, 
+            image_bgr=face_image, 
+            scale_factor=face_scale
+        )
         
         # Collect faces to add to FAISS after all DB commits succeed
         faces_for_faiss = []
@@ -310,17 +386,20 @@ class MLPipeline:
         # Add to FAISS index AFTER all DB operations succeed
         for face_id, embedding in faces_for_faiss:
             self.index.add_vectors("face", embedding.reshape(1, -1), [face_id])
-
-        # Save FAISS index after batch of faces
-        if results["faces"]:
-            self.index.save_index("face")
+        # Note: FAISS save is deferred to batch level (scan.py calls save_all_dirty)
         
         if auto_assigned_count > 0:
             logging.info(f"Auto-assigned {auto_assigned_count} faces to known people")
 
-        # Detect objects
+        # =======================================================================
+        # OBJECT DETECTION with pre-resized image
+        # =======================================================================
         try:
-            object_detections = self.object_detector.detect(photo_path)
+            object_detections = self.object_detector.detect(
+                photo_path, 
+                image_bgr=ml_image_bgr, 
+                scale_factor=ml_scale
+            )
             for x, y, w, h, category, conf in object_detections:
                 object_id = self.store.add_object(
                     photo_id=photo_id,
@@ -338,89 +417,98 @@ class MLPipeline:
 
         # =====================================================================
         # PET DETECTION & EMBEDDING (for pet identity grouping)
+        # Uses original_bgr for cropping to maintain quality
         # =====================================================================
         try:
-            # Detect animals using YOLO
-            animal_detections = self.object_detector.detect_animals(photo_path, min_confidence=0.4)
+            # Detect animals using pre-resized image
+            animal_detections = self.object_detector.detect_animals(
+                photo_path, 
+                min_confidence=0.4,
+                image_bgr=ml_image_bgr,
+                scale_factor=ml_scale
+            )
             
             if animal_detections:
-                # Load image for cropping
-                img = cv2.imread(photo_path)
-                if img is not None:
-                    img_height, img_width = img.shape[:2]
+                # Use original image for cropping (mejor quality)
+                img = original_bgr
+                img_height, img_width = img.shape[:2]
+                
+                # Collect pets to add to FAISS after all DB commits succeed
+                pets_for_faiss = []
+                
+                for x, y, w, h, species, conf in animal_detections:
+                    # Add padding to crop (20% on each side)
+                    padding = 0.2
+                    pad_x = int(w * padding)
+                    pad_y = int(h * padding)
                     
-                    # Collect pets to add to FAISS after all DB commits succeed
-                    pets_for_faiss = []
+                    crop_x1 = max(0, x - pad_x)
+                    crop_y1 = max(0, y - pad_y)
+                    crop_x2 = min(img_width, x + w + pad_x)
+                    crop_y2 = min(img_height, y + h + pad_y)
                     
-                    for x, y, w, h, species, conf in animal_detections:
-                        # Add padding to crop (20% on each side)
-                        padding = 0.2
-                        pad_x = int(w * padding)
-                        pad_y = int(h * padding)
-                        
-                        crop_x1 = max(0, x - pad_x)
-                        crop_y1 = max(0, y - pad_y)
-                        crop_x2 = min(img_width, x + w + pad_x)
-                        crop_y2 = min(img_height, y + h + pad_y)
-                        
-                        # Crop pet region
-                        pet_crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
-                        
-                        # Skip tiny crops
-                        if pet_crop.shape[0] < 32 or pet_crop.shape[1] < 32:
-                            continue
-                        
-                        # Generate CLIP embedding for pet identity
-                        pet_embedding = self.image_embedder.embed_crop(pet_crop)
-                        
-                        # Skip if embedding failed (zero vector)
-                        if np.allclose(pet_embedding, 0):
-                            continue
-                        
-                        # Store pet detection + embedding atomically in DB
-                        pet_detection_id = self.store.add_pet_detection_with_embedding(
-                            photo_id=photo_id,
-                            bbox_x=x,
-                            bbox_y=y,
-                            bbox_w=w,
-                            bbox_h=h,
-                            species=species,
-                            confidence=conf,
-                            embedding=pet_embedding,
-                        )
-                        
-                        # Queue for FAISS update (only after DB commit succeeded)
-                        pets_for_faiss.append((pet_detection_id, pet_embedding))
-                        results["pets"].append(pet_detection_id)
+                    # Crop pet region
+                    pet_crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
                     
-                    # Add to FAISS index AFTER all DB operations succeed
-                    for pet_detection_id, pet_embedding in pets_for_faiss:
-                        self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
+                    # Skip tiny crops
+                    if pet_crop.shape[0] < 32 or pet_crop.shape[1] < 32:
+                        continue
                     
-                    # Save FAISS index after batch of pets
-                    if results["pets"]:
-                        self.index.save_index("pet")
-                        
+                    # Generate CLIP embedding for pet identity
+                    pet_embedding = self.image_embedder.embed_crop(pet_crop)
+                    
+                    # Skip if embedding failed (zero vector)
+                    if np.allclose(pet_embedding, 0):
+                        continue
+                    
+                    # Store pet detection + embedding atomically in DB
+                    pet_detection_id = self.store.add_pet_detection_with_embedding(
+                        photo_id=photo_id,
+                        bbox_x=x,
+                        bbox_y=y,
+                        bbox_w=w,
+                        bbox_h=h,
+                        species=species,
+                        confidence=conf,
+                        embedding=pet_embedding,
+                    )
+                    
+                    # Queue for FAISS update (only after DB commit succeeded)
+                    pets_for_faiss.append((pet_detection_id, pet_embedding))
+                    results["pets"].append(pet_detection_id)
+                
+                # Add to FAISS index AFTER all DB operations succeed
+                for pet_detection_id, pet_embedding in pets_for_faiss:
+                    self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
+                # Note: FAISS save is deferred to batch level
+                    
         except Exception as e:
             logging.warning(f"Pet detection failed for {photo_path}: {e}")
 
-        # Generate image embedding (for semantic search)
+        # =======================================================================
+        # IMAGE EMBEDDING with pre-decoded PIL image
+        # =======================================================================
         try:
-            image_embedding = self.image_embedder.embed(photo_path)
+            image_embedding = self.image_embedder.embed_pil(ml_image_rgb)
             self.index.add_vectors("image", image_embedding.reshape(1, -1), [photo_id])
-            self.index.save_index("image")
+            # Note: FAISS save is deferred to batch level
             results["image_embedding_id"] = photo_id
         except Exception as e:
             # Image embedding is optional
             logging.warning(f"Image embedding failed for {photo_path}: {e}")
 
         # =====================================================================
-        # FUSED SCENE DETECTION (Places365 + CLIP + Florence-2 + YOLO evidence)
-        # Industry-grade scene tagging similar to Google Photos / EYE
+        # FUSED SCENE DETECTION with pre-decoded images
+        # (Places365 + CLIP + Florence-2 + YOLO evidence)
         # =====================================================================
         results["scenes"] = []
         try:
-            fused_tags = self._detect_scenes_fused(photo_path, results.get("objects", []))
+            fused_tags = self._detect_scenes_fused(
+                photo_path, 
+                results.get("objects", []),
+                ml_image_rgb=ml_image_rgb,
+                florence_image_rgb=florence_image
+            )
             
             # Store fused tags (deduplicated, capped)
             stored_tags = set()
@@ -456,12 +544,19 @@ class MLPipeline:
             logging.warning(f"Scene detection failed for {photo_path}: {e}")
             results["scenes"] = []
 
+        # =======================================================================
+        # CLEANUP: Clear image from cache to free memory
+        # =======================================================================
+        image_cache.clear(photo_path)
+
         return results
     
     def _detect_scenes_fused(
         self, 
         image_path: str, 
-        object_ids: List[int]
+        object_ids: List[int],
+        ml_image_rgb: Optional['Image.Image'] = None,
+        florence_image_rgb: Optional['Image.Image'] = None
     ) -> List[Tuple[str, float, str]]:
         """
         Fused scene detection combining Places365, CLIP, Florence-2, and YOLO evidence.
@@ -469,6 +564,8 @@ class MLPipeline:
         Args:
             image_path: Path to image
             object_ids: List of object IDs detected in this image
+            ml_image_rgb: Optional pre-decoded PIL RGB image for Places365/CLIP
+            florence_image_rgb: Optional pre-decoded PIL RGB image for Florence-2
             
         Returns:
             List of (tag, confidence, source) tuples, sorted by confidence
@@ -480,18 +577,18 @@ class MLPipeline:
         seen_tags = set()
         
         # =====================================================================
-        # 1. Places365 Scene Detection
+        # 1. Places365 Scene Detection (with pre-decoded image)
         # =====================================================================
         try:
             # Get simplified category tags
-            places_tags = self.scene_detector.get_all_scene_tags(image_path)
+            places_tags = self.scene_detector.get_all_scene_tags(image_path, image_rgb=ml_image_rgb)
             for tag in places_tags:
                 if tag not in seen_tags:
                     all_tags.append((tag, 0.8, 'places365'))  # High confidence for categorical match
                     seen_tags.add(tag)
             
             # Get detailed detections with confidence
-            detailed = self.scene_detector.detect(image_path, top_k=10)
+            detailed = self.scene_detector.detect(image_path, top_k=10, image_rgb=ml_image_rgb)
             for scene_label, confidence in detailed:
                 if confidence >= SCENE_FUSION_CONFIG["places365_min_confidence"]:
                     # Extract base tag from detailed label (e.g., "sky/sunset" -> "sunset")
@@ -505,10 +602,10 @@ class MLPipeline:
             logging.warning(f"Places365 scene detection failed: {e}")
         
         # =====================================================================
-        # 2. CLIP Zero-Shot Scene Detection
+        # 2. CLIP Zero-Shot Scene Detection (with pre-decoded image)
         # =====================================================================
         try:
-            clip_detections = self.clip_scene_detector.detect(image_path)
+            clip_detections = self.clip_scene_detector.detect(image_path, image_rgb=ml_image_rgb)
             for tag, confidence in clip_detections:
                 if confidence >= SCENE_FUSION_CONFIG["clip_min_confidence"]:
                     if tag not in seen_tags:
@@ -518,11 +615,11 @@ class MLPipeline:
             logging.warning(f"CLIP scene detection failed: {e}")
         
         # =====================================================================
-        # 3. Florence-2 Vision-Language Tags
+        # 3. Florence-2 Vision-Language Tags (with pre-decoded image)
         # =====================================================================
         try:
             generic_filter = SCENE_FUSION_CONFIG.get("generic_tags_filter", set())
-            florence_detections = self.florence_detector.get_scene_tags(image_path)
+            florence_detections = self.florence_detector.get_scene_tags(image_path, image_rgb=florence_image_rgb)
             for tag, confidence in florence_detections:
                 # Filter generic tags and apply confidence threshold
                 if confidence >= SCENE_FUSION_CONFIG["florence_min_confidence"]:

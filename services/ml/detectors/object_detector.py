@@ -1,7 +1,7 @@
 """Object detection using YOLOv8."""
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import cv2
 import numpy as np
@@ -127,23 +127,40 @@ class ObjectDetector:
             model_name = f"yolov8{self.model_size}.pt"
             self.model = YOLO(model_name)
 
-    def detect(self, image_path: str) -> List[Tuple[int, int, int, int, str, float]]:
+    def detect(
+        self, 
+        image_path: str,
+        image_bgr: Optional[np.ndarray] = None,
+        scale_factor: float = 1.0
+    ) -> List[Tuple[int, int, int, int, str, float]]:
         """
         Detect objects in an image.
+        
+        Args:
+            image_path: Path to image (used if image_bgr not provided)
+            image_bgr: Optional pre-decoded BGR image (from ImageCache)
+            scale_factor: Scale factor to map bboxes back to original coordinates
+        
         Returns list of (x, y, width, height, category, confidence) tuples.
         Category format: "simplified_category:original_class" (e.g., "plant:potted plant")
+        Bboxes are in ORIGINAL image coordinates.
         """
         import logging
         
         self._load_model()
         
+        # Use pre-decoded image if provided
+        source = image_bgr if image_bgr is not None else image_path
+        
         try:
-            results = self.model(image_path, conf=self.confidence_threshold, verbose=False)
+            results = self.model(source, conf=self.confidence_threshold, verbose=False)
         except Exception as e:
             logging.error(f"Object detection failed for {image_path}: {e}")
             return []
 
         detections = []
+        inv_scale = 1.0 / scale_factor if scale_factor != 1.0 else 1.0
+        
         for result in results:
             boxes = result.boxes
             for box in boxes:
@@ -163,15 +180,39 @@ class ObjectDetector:
 
                 width = int(x2 - x1)
                 height = int(y2 - y1)
-                detections.append((int(x1), int(y1), width, height, category, confidence))
+                x1 = int(x1)
+                y1 = int(y1)
+                
+                # Scale bbox back to original image coordinates
+                if scale_factor != 1.0:
+                    x1 = int(x1 * inv_scale)
+                    y1 = int(y1 * inv_scale)
+                    width = int(width * inv_scale)
+                    height = int(height * inv_scale)
+                
+                detections.append((x1, y1, width, height, category, confidence))
         
         logging.info(f"Detected {len(detections)} objects in {image_path}")
         return detections
 
-    def detect_animals(self, image_path: str, min_confidence: float = 0.4) -> List[Tuple[int, int, int, int, str, float]]:
+    def detect_animals(
+        self, 
+        image_path: str, 
+        min_confidence: float = 0.4,
+        image_bgr: Optional[np.ndarray] = None,
+        scale_factor: float = 1.0
+    ) -> List[Tuple[int, int, int, int, str, float]]:
         """
         Detect animals/pets in an image for identity grouping.
+        
+        Args:
+            image_path: Path to image (used if image_bgr not provided)
+            min_confidence: Minimum confidence threshold
+            image_bgr: Optional pre-decoded BGR image (from ImageCache)
+            scale_factor: Scale factor to map bboxes back to original coordinates
+        
         Returns list of (x, y, width, height, species, confidence) tuples.
+        Bboxes are in ORIGINAL image coordinates.
         
         Uses a lower confidence threshold than general objects since we want
         to capture pets even when partially visible.
@@ -180,13 +221,18 @@ class ObjectDetector:
         
         self._load_model()
         
+        # Use pre-decoded image if provided
+        source = image_bgr if image_bgr is not None else image_path
+        
         try:
-            results = self.model(image_path, conf=min_confidence, verbose=False)
+            results = self.model(source, conf=min_confidence, verbose=False)
         except Exception as e:
             logging.error(f"Animal detection failed for {image_path}: {e}")
             return []
 
         detections = []
+        inv_scale = 1.0 / scale_factor if scale_factor != 1.0 else 1.0
+        
         for result in results:
             boxes = result.boxes
             for box in boxes:
@@ -203,7 +249,17 @@ class ObjectDetector:
                 
                 width = int(x2 - x1)
                 height = int(y2 - y1)
-                detections.append((int(x1), int(y1), width, height, species, confidence))
+                x1 = int(x1)
+                y1 = int(y1)
+                
+                # Scale bbox back to original image coordinates
+                if scale_factor != 1.0:
+                    x1 = int(x1 * inv_scale)
+                    y1 = int(y1 * inv_scale)
+                    width = int(width * inv_scale)
+                    height = int(height * inv_scale)
+                
+                detections.append((x1, y1, width, height, species, confidence))
         
         logging.info(f"Detected {len(detections)} animals in {image_path}")
         return detections
