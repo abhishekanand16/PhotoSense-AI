@@ -23,7 +23,7 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
   const { theme, toggleTheme } = useTheme();
   const [searchQuery, setSearchQuery] = useState("");
-  const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const [, setIsBackendConnected] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   
   const [globalStatus, setGlobalStatus] = useState<GlobalScanStatus>({

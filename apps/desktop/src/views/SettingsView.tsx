@@ -22,7 +22,7 @@ import Card from "../components/common/Card";
 
 const SettingsView: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
-  const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const [, setIsBackendConnected] = useState(false);
   const [globalStatus, setGlobalStatus] = useState<GlobalScanStatus>({
     status: "idle",
     total_photos: 0,

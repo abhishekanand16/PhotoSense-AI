@@ -84,7 +84,7 @@ const PlacesView: React.FC = () => {
   }, []);
 
   // Handle cluster click on map
-  const handleClusterClick = useCallback(async (bounds: L.LatLngBounds, photoIds: number[]) => {
+  const handleClusterClick = useCallback(async (bounds: L.LatLngBounds, _photoIds: number[]) => {
     try {
       setPhotosLoading(true);
       setSelectedPlace(null);
