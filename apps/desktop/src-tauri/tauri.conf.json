@@ -1,9 +1,9 @@
 {
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:web",
     "beforeBuildCommand": "npm run build",
     "devPath": "http://localhost:1420",
-    "withGlobalTauri": false
+    "distDir": "../dist"
   },
   "package": {
     "productName": "PhotoSense-AI",
@@ -18,47 +18,33 @@
         "sidecar": true,
         "scope": [
           {
-            "name": "binaries/photosense-backend",
+            "name": "photosense-backend",
             "sidecar": true,
             "args": true
           }
         ]
       },
       "dialog": {
-        "all": false,
-        "open": true
+        "all": true
       },
       "fs": {
-        "all": false,
-        "readFile": true,
-        "readDir": true,
-        "scope": [
-          "$APPDATA/**",
-          "$APPDATA/PhotoSense-AI/**",
-          "$DOCUMENT/**",
-          "$PICTURE/**",
-          "**"
-        ]
+        "all": true,
+        "scope": ["**"]
+      },
+      "path": {
+        "all": true
       },
       "protocol": {
         "asset": true,
-        "assetScope": [
-          "$APPDATA/**",
-          "$APPDATA/PhotoSense-AI/**",
-          "$DOCUMENT/**",
-          "$PICTURE/**",
-          "**"
-        ]
+        "assetScope": ["**"]
       },
       "process": {
-        "all": false,
-        "exit": true,
-        "relaunch": true
+        "all": true
       }
     },
     "bundle": {
       "active": true,
-      "targets": "all",
+      "targets": ["dmg", "app"],
       "identifier": "com.photosense.ai",
       "icon": [
         "icons/32x32.png",
@@ -67,12 +53,13 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "externalBin": [
-        "binaries/photosense-backend"
-      ],
-      "resources": [
-        "binaries/*"
-      ]
+      "externalBin": ["photosense-backend"],
+      "macOS": {
+        "minimumSystemVersion": "10.15",
+        "exceptionDomain": "",
+        "signingIdentity": null,
+        "entitlements": null
+      }
     },
     "security": {
       "csp": null
@@ -82,10 +69,11 @@
         "fullscreen": false,
         "resizable": true,
         "title": "PhotoSense-AI",
-        "width": 1200,
+        "width": 1280,
         "height": 800,
-        "minWidth": 800,
-        "minHeight": 600
+        "minWidth": 900,
+        "minHeight": 650,
+        "center": true
       }
     ]
   }

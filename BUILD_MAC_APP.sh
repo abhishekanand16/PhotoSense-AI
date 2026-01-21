@@ -1,7 +1,6 @@
 #!/bin/bash
 #
 # ONE-CLICK MAC BUILD - Creates PhotoSense-AI.dmg
-# Just run: ./BUILD_MAC_APP.sh
 #
 
 set -e
@@ -11,16 +10,23 @@ echo "╔═══════════════════════�
 echo "║                                                                ║"
 echo "║              PhotoSense-AI Mac App Builder                     ║"
 echo "║                                                                ║"
-echo "║   This will create a DMG file you can distribute.             ║"
-echo "║   The build takes about 10-15 minutes.                        ║"
-echo "║                                                                ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 echo ""
 
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(pwd)"
 
+# Determine architecture
+ARCH=$(uname -m)
+if [ "$ARCH" = "arm64" ]; then
+    TARGET="aarch64-apple-darwin"
+else
+    TARGET="x86_64-apple-darwin"
+fi
+echo "Building for: $TARGET"
+
 # Check prerequisites
+echo ""
 echo "[1/6] Checking prerequisites..."
 
 if ! command -v python3 &> /dev/null; then
@@ -49,7 +55,7 @@ if ! command -v create-dmg &> /dev/null; then
 fi
 echo "  ✓ create-dmg installed"
 
-# Step 2: Setup Python environment
+# Step 2: Setup Python environment and build backend
 echo ""
 echo "[2/6] Setting up Python environment..."
 
@@ -61,67 +67,68 @@ source "$VENV_DIR/bin/activate"
 
 pip install --upgrade pip -q
 pip install pyinstaller -q
+echo "  Installing Python dependencies (this takes a few minutes first time)..."
 pip install -r "$PROJECT_ROOT/requirements.txt" -q
 
-echo "  ✓ Python dependencies installed"
+echo "  ✓ Python environment ready"
 
 # Step 3: Build Python backend
 echo ""
-echo "[3/6] Building Python backend (this takes 3-5 minutes)..."
+echo "[3/6] Building Python backend..."
 
 cd "$PROJECT_ROOT/packaging/backend"
 rm -rf build dist
-pyinstaller photosense_backend.spec --noconfirm
 
-BACKEND_EXE="$PROJECT_ROOT/packaging/backend/dist/photosense-backend/photosense-backend"
-if [ ! -f "$BACKEND_EXE" ]; then
-    echo "ERROR: Backend build failed"
+pyinstaller photosense_backend.spec --noconfirm 2>&1 | grep -E "(Building|INFO|ERROR|WARNING)" | head -20
+
+BACKEND_DIR="$PROJECT_ROOT/packaging/backend/dist/photosense-backend"
+if [ ! -f "$BACKEND_DIR/photosense-backend" ]; then
+    echo "ERROR: Backend build failed - executable not found"
     exit 1
 fi
 echo "  ✓ Backend built successfully"
 
-# Step 4: Setup frontend
+# Step 4: Copy backend to Tauri binaries location
 echo ""
-echo "[4/6] Setting up frontend..."
+echo "[4/6] Preparing Tauri sidecar..."
 
-cd "$PROJECT_ROOT/apps/desktop"
-npm install --silent
+TAURI_DIR="$PROJECT_ROOT/apps/desktop/src-tauri"
+BINARIES_DIR="$TAURI_DIR/binaries"
+
+# Clean and create binaries directory
+rm -rf "$BINARIES_DIR"
+mkdir -p "$BINARIES_DIR"
+
+# Tauri expects the sidecar at: binaries/name-target-triple
+# For PyInstaller onedir bundles, we need ALL files from the bundle
+
+# Copy entire PyInstaller output
+cp -R "$BACKEND_DIR/"* "$BINARIES_DIR/"
+
+# Rename the main executable with target triple
+mv "$BINARIES_DIR/photosense-backend" "$BINARIES_DIR/photosense-backend-$TARGET"
+chmod +x "$BINARIES_DIR/photosense-backend-$TARGET"
+
+echo "  ✓ Sidecar prepared: photosense-backend-$TARGET"
+echo "  Files in binaries/:"
+ls "$BINARIES_DIR" | head -5
+echo "  ... and $(ls "$BINARIES_DIR" | wc -l | tr -d ' ') total files"
 
 # Step 5: Build Tauri app
 echo ""
 echo "[5/6] Building Tauri app (this takes 5-10 minutes)..."
 
-# Copy backend to Tauri binaries
-BINARIES_DIR="$PROJECT_ROOT/apps/desktop/src-tauri/binaries"
-rm -rf "$BINARIES_DIR"
-mkdir -p "$BINARIES_DIR"
-
-# Determine architecture
-ARCH=$(uname -m)
-if [ "$ARCH" = "arm64" ]; then
-    TARGET="aarch64-apple-darwin"
-else
-    TARGET="x86_64-apple-darwin"
-fi
-
-# Copy entire backend bundle (all files needed for PyInstaller bundle)
-cp -r "$PROJECT_ROOT/packaging/backend/dist/photosense-backend/"* "$BINARIES_DIR/"
-
-# Rename main executable with target triple (Tauri requirement)
-mv "$BINARIES_DIR/photosense-backend" "$BINARIES_DIR/photosense-backend-$TARGET"
-chmod +x "$BINARIES_DIR/photosense-backend-$TARGET"
-
-echo "  Backend copied to: $BINARIES_DIR"
-echo "  Executable: photosense-backend-$TARGET"
-
-# Update tauri.conf.json to include sidecar
 cd "$PROJECT_ROOT/apps/desktop"
-npm run tauri build
+npm install --silent 2>/dev/null
+
+# Build the Tauri app
+npm run tauri build 2>&1 | grep -E "(Compiling|Finished|Bundling|Error|error)" | head -30
 
 # Find the built app
-APP_PATH=$(find "$PROJECT_ROOT/apps/desktop/src-tauri/target/release/bundle/macos" -name "*.app" -type d 2>/dev/null | head -1)
+APP_PATH=$(find "$TAURI_DIR/target/release/bundle/macos" -name "*.app" -type d 2>/dev/null | head -1)
 if [ -z "$APP_PATH" ]; then
     echo "ERROR: Tauri build failed - no .app found"
+    echo "Check the output above for errors"
     exit 1
 fi
 echo "  ✓ App built: $(basename "$APP_PATH")"
@@ -135,7 +142,8 @@ mkdir -p "$OUTPUT_DIR"
 DMG_PATH="$OUTPUT_DIR/PhotoSense-AI.dmg"
 rm -f "$DMG_PATH"
 
-create-dmg \
+# Try create-dmg first, fall back to hdiutil
+if create-dmg \
     --volname "PhotoSense-AI" \
     --window-pos 200 120 \
     --window-size 600 400 \
@@ -145,18 +153,25 @@ create-dmg \
     --app-drop-link 450 185 \
     --no-internet-enable \
     "$DMG_PATH" \
-    "$APP_PATH" \
-    2>/dev/null || hdiutil create -volname "PhotoSense-AI" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+    "$APP_PATH" 2>/dev/null; then
+    echo "  ✓ DMG created with create-dmg"
+else
+    echo "  Using hdiutil fallback..."
+    hdiutil create -volname "PhotoSense-AI" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+    echo "  ✓ DMG created with hdiutil"
+fi
 
-# Cleanup
+# Cleanup build artifacts (keep the DMG)
 echo ""
-echo "Cleaning up..."
+echo "Cleaning up build artifacts..."
 rm -rf "$PROJECT_ROOT/packaging/backend/build"
 rm -rf "$PROJECT_ROOT/packaging/backend/dist"
-rm -rf "$PROJECT_ROOT/apps/desktop/src-tauri/binaries"
+rm -rf "$BINARIES_DIR"
 deactivate 2>/dev/null || true
 
-# Done
+# Get DMG size
+DMG_SIZE=$(du -h "$DMG_PATH" | cut -f1)
+
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║                                                                ║"
@@ -164,14 +179,16 @@ echo "║                    BUILD COMPLETE!                             ║"
 echo "║                                                                ║"
 echo "╠════════════════════════════════════════════════════════════════╣"
 echo "║                                                                ║"
-echo "║   Your installer is ready:                                     ║"
-echo "║                                                                ║"
-echo "║   📦  $DMG_PATH"
+echo "║   📦 Output: dist/PhotoSense-AI.dmg ($DMG_SIZE)                ║"
 echo "║                                                                ║"
 echo "║   To install:                                                  ║"
-echo "║   1. Double-click the DMG file                                 ║"
+echo "║   1. Double-click PhotoSense-AI.dmg                            ║"
 echo "║   2. Drag PhotoSense-AI to Applications                        ║"
 echo "║   3. Launch from Applications folder                           ║"
+echo "║                                                                ║"
+echo "║   First launch note:                                           ║"
+echo "║   If macOS says 'damaged', run in Terminal:                    ║"
+echo "║   xattr -cr /Applications/PhotoSense-AI.app                    ║"
 echo "║                                                                ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 echo ""
