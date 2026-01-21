@@ -11,6 +11,16 @@ import sys
 from pathlib import Path
 
 
+def get_bundle_dir() -> Path:
+    """Get the directory where the bundled app is located."""
+    if getattr(sys, 'frozen', False):
+        # Running as PyInstaller bundle
+        return Path(sys._MEIPASS)
+    else:
+        # Running as script (development)
+        return Path(__file__).parent.parent
+
+
 def get_app_data_dir() -> Path:
     """Get platform-specific application data directory."""
     import platform
@@ -20,12 +30,29 @@ def get_app_data_dir() -> Path:
     if system == "Darwin":  # macOS
         base = Path.home() / "Library" / "Application Support"
     elif system == "Windows":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        # Use APPDATA with proper fallback
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            base = Path(appdata)
+        else:
+            base = Path.home() / "AppData" / "Roaming"
     else:  # Linux
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        if xdg_data:
+            base = Path(xdg_data)
+        else:
+            base = Path.home() / ".local" / "share"
     
     app_dir = base / "PhotoSense-AI"
-    app_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create directory with proper error handling
+    try:
+        app_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        # Fallback to user's home directory if APPDATA is not writable
+        app_dir = Path.home() / ".photosense-ai"
+        app_dir.mkdir(parents=True, exist_ok=True)
+    
     return app_dir
 
 
@@ -44,21 +71,31 @@ def setup_environment():
         if os.environ.get(key) is None:
             os.environ[key] = str(default_threads)
     
-    # Disable tokenizers parallelism (can cause issues)
+    # Disable tokenizers parallelism (can cause issues in bundled apps)
     if os.environ.get("TOKENIZERS_PARALLELISM") is None:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
     
-    # When running as PyInstaller bundle, add the bundle path to sys.path
+    # When running as PyInstaller bundle, configure paths
     if getattr(sys, 'frozen', False):
-        bundle_dir = Path(sys._MEIPASS)
+        bundle_dir = get_bundle_dir()
+        
+        # Add bundle directory to sys.path for imports
         if str(bundle_dir) not in sys.path:
             sys.path.insert(0, str(bundle_dir))
+        
+        # Set working directory to bundle dir (for relative paths)
+        os.chdir(bundle_dir)
+        
+        # Log bundle info for debugging
+        print(f"[Bundle] Running from: {bundle_dir}")
+        print(f"[Bundle] sys.path[0]: {sys.path[0]}")
 
 
 def main():
     """Start the FastAPI backend server."""
     setup_environment()
     
+    # Import after environment setup
     import uvicorn
     from services.api.main import app
     
@@ -72,17 +109,27 @@ def main():
     print(f"Host: {host}")
     print(f"Port: {port}")
     print(f"Data directory: {os.environ.get('PHOTOSENSE_DATA_DIR')}")
+    if getattr(sys, 'frozen', False):
+        print(f"Bundle directory: {get_bundle_dir()}")
     print(f"=" * 60)
     
-    # Run the server
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        log_level="info",
-        # Disable reload in production bundle
-        reload=False,
-    )
+    try:
+        # Run the server
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+            # Disable reload in production bundle
+            reload=False,
+            # Disable access log for cleaner output
+            access_log=False,
+        )
+    except Exception as e:
+        print(f"[ERROR] Failed to start server: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

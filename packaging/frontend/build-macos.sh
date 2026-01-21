@@ -75,10 +75,21 @@ else
     TARGET_TRIPLE="x86_64-apple-darwin"
 fi
 
-# Copy backend with correct sidecar naming convention
+# For Tauri sidecar with PyInstaller folder bundles:
+# Tauri expects: binaries/photosense-backend-{target-triple}
+# PyInstaller creates a folder with executable + dependencies
+#
+# We copy everything flat to binaries/ and rename the main executable
+
+# Copy the entire bundle contents directly to binaries
 cp -r "$BACKEND_DIR"/* "$SIDECAR_DIR/"
+
+# Rename the main executable with the target triple
 mv "$SIDECAR_DIR/photosense-backend" "$SIDECAR_DIR/photosense-backend-$TARGET_TRIPLE"
 chmod +x "$SIDECAR_DIR/photosense-backend-$TARGET_TRIPLE"
+
+echo "Sidecar executable: $SIDECAR_DIR/photosense-backend-$TARGET_TRIPLE"
+echo "Dependencies in: $SIDECAR_DIR/"
 
 # Install npm dependencies
 echo ""

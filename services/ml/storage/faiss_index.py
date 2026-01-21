@@ -139,10 +139,18 @@ class FAISSIndex:
             backup_dir = self._get_backup_dir() / f"{embedding_type}_{timestamp}"
             backup_dir.mkdir(parents=True, exist_ok=True)
             
+            # Use try/except for each file to handle Windows file locks gracefully
             if index_path.exists():
-                shutil.copy2(index_path, backup_dir / index_path.name)
+                try:
+                    shutil.copy2(index_path, backup_dir / index_path.name)
+                except PermissionError as e:
+                    logger.warning(f"Could not backup index file (may be in use): {e}")
+                    
             if id_map_path.exists():
-                shutil.copy2(id_map_path, backup_dir / id_map_path.name)
+                try:
+                    shutil.copy2(id_map_path, backup_dir / id_map_path.name)
+                except PermissionError as e:
+                    logger.warning(f"Could not backup ID map file (may be in use): {e}")
             
             logger.info(f"Created backup of {embedding_type} index at {backup_dir}")
             return backup_dir

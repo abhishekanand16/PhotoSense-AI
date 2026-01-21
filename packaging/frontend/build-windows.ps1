@@ -71,9 +71,41 @@ New-Item -ItemType Directory -Force -Path $SidecarDir | Out-Null
 # Target triple for Windows
 $TargetTriple = "x86_64-pc-windows-msvc"
 
-# Copy backend with correct sidecar naming convention
+# For Tauri sidecar with PyInstaller folder bundles:
+# Tauri expects: binaries/photosense-backend-{target-triple}.exe
+# 
+# Since PyInstaller creates a folder with the executable inside,
+# we need to create a batch wrapper that Tauri can execute directly
+
+# Copy entire PyInstaller bundle to a subfolder
+$BackendBundleDir = "$SidecarDir\photosense-backend-bundle"
+Copy-Item -Recurse $BackendDir $BackendBundleDir
+
+# Create a batch wrapper that Tauri will execute as the sidecar
+# This script launches the actual PyInstaller bundle
+$wrapperContent = @'
+@echo off
+set SCRIPT_DIR=%~dp0
+"%SCRIPT_DIR%photosense-backend-bundle\photosense-backend.exe" %*
+'@
+$wrapperContent | Out-File -FilePath "$SidecarDir\photosense-backend-$TargetTriple.exe.cmd" -Encoding ASCII
+
+# Actually, Tauri needs a real .exe, not a .cmd
+# Let's just rename the exe directly and keep deps alongside
+# Alternative approach: copy the main exe and create a launch wrapper
+
+# Remove the cmd approach - instead, copy everything flat
+Remove-Item "$SidecarDir\photosense-backend-$TargetTriple.exe.cmd" -ErrorAction SilentlyContinue
+Remove-Item $BackendBundleDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# Copy the entire bundle contents directly to binaries
 Copy-Item -Recurse "$BackendDir\*" $SidecarDir
+
+# Rename the main executable with the target triple
 Rename-Item "$SidecarDir\photosense-backend.exe" "photosense-backend-$TargetTriple.exe"
+
+Write-Host "Sidecar executable: $SidecarDir\photosense-backend-$TargetTriple.exe"
+Write-Host "Dependencies in: $SidecarDir\"
 
 # Install npm dependencies
 Write-Host ""

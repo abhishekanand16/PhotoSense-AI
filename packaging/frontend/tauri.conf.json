@@ -20,7 +20,7 @@
         "execute": false,
         "scope": [
           {
-            "name": "binaries/photosense-backend",
+            "name": "photosense-backend",
             "sidecar": true,
             "args": true
           }
@@ -82,7 +82,7 @@
       "category": "Photography",
       "copyright": "Copyright © 2024 PhotoSense-AI",
       "externalBin": [
-        "binaries/photosense-backend"
+        "photosense-backend"
       ],
       "icon": [
         "icons/32x32.png",

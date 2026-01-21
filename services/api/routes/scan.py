@@ -39,7 +39,7 @@ def _load_scan_state() -> None:
     if not _state_file.exists():
         return
     try:
-        payload = json.loads(_state_file.read_text())
+        payload = json.loads(_state_file.read_text(encoding="utf-8"))
     except Exception:
         return
     with _global_state_lock:
@@ -51,7 +51,10 @@ def _persist_scan_state() -> None:
     try:
         _state_dir.mkdir(parents=True, exist_ok=True)
         snapshot = _get_global_state()
-        _state_file.write_text(json.dumps(snapshot))
+        _state_file.write_text(json.dumps(snapshot), encoding="utf-8")
+    except (OSError, PermissionError):
+        # Handle Windows file locks gracefully
+        return
     except Exception:
         return
 

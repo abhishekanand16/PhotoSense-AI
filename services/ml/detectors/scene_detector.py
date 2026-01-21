@@ -67,7 +67,9 @@ class SceneDetector:
         try:
             # Try loading from torch hub with local cache
             import os
-            os.environ['TORCH_HOME'] = os.path.expanduser('~/.cache/torch')
+            torch_home = Path.home() / ".cache" / "torch"
+            torch_home.mkdir(parents=True, exist_ok=True)
+            os.environ['TORCH_HOME'] = str(torch_home)
             
             # Silence torch hub's noisy "Using cache found ..." output when cached.
             try:
@@ -91,11 +93,11 @@ class SceneDetector:
             
             # Load scene labels with offline fallback
             import urllib.request
-            local_labels_path = os.path.join(os.path.dirname(__file__), 'places365_labels.txt')
+            local_labels_path = Path(__file__).parent / "places365_labels.txt"
             
             # First try local file (faster and more reliable)
-            if os.path.exists(local_labels_path):
-                with open(local_labels_path, 'r') as f:
+            if local_labels_path.exists():
+                with open(local_labels_path, "r", encoding="utf-8") as f:
                     self.labels = []
                     for line in f.readlines():
                         # Format: "/a/airfield 0" -> "airfield"

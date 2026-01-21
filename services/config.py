@@ -2,8 +2,33 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 from pathlib import Path
 from typing import Dict, Set
+
+# Windows MAX_PATH limit (260 characters) - use extended path prefix to support longer paths
+WINDOWS_MAX_PATH = 260
+
+
+def _ensure_long_path_support(path: Path) -> Path:
+    """
+    On Windows, prepend \\\\?\\ prefix for long path support if needed.
+    This allows paths longer than 260 characters.
+    """
+    if platform.system() != "Windows":
+        return path
+    
+    path_str = str(path.resolve())
+    
+    # Already has long path prefix
+    if path_str.startswith("\\\\?\\"):
+        return path
+    
+    # Only add prefix for paths approaching the limit
+    if len(path_str) > WINDOWS_MAX_PATH - 50:
+        return Path(f"\\\\?\\{path_str}")
+    
+    return path
 
 
 def get_app_data_dir() -> Path:
@@ -16,20 +41,33 @@ def get_app_data_dir() -> Path:
     - Linux: ~/.local/share/PhotoSense-AI (or $XDG_DATA_HOME/PhotoSense-AI)
     
     Can be overridden with PHOTOSENSE_DATA_DIR environment variable.
+    
+    Directory is created if it doesn't exist.
     """
     if env_dir := os.environ.get("PHOTOSENSE_DATA_DIR"):
-        return Path(env_dir).resolve()
+        app_dir = Path(env_dir).resolve()
+    else:
+        system = platform.system()
+        
+        if system == "Darwin":  # macOS
+            base = Path.home() / "Library" / "Application Support"
+        elif system == "Windows":
+            # Use APPDATA with proper fallback
+            appdata = os.environ.get("APPDATA")
+            if appdata:
+                base = Path(appdata)
+            else:
+                base = Path.home() / "AppData" / "Roaming"
+        else:  # Linux and others
+            xdg_data = os.environ.get("XDG_DATA_HOME")
+            if xdg_data:
+                base = Path(xdg_data)
+            else:
+                base = Path.home() / ".local" / "share"
+        
+        app_dir = base / "PhotoSense-AI"
     
-    system = platform.system()
-    
-    if system == "Darwin":  # macOS
-        base = Path.home() / "Library" / "Application Support"
-    elif system == "Windows":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    else:  # Linux and others
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    
-    return base / "PhotoSense-AI"
+    return app_dir
 
 
 APP_NAME = "PhotoSense-AI"

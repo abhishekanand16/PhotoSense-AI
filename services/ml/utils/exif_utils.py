@@ -1,6 +1,5 @@
 """Utility functions for photo processing."""
 
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -47,8 +46,9 @@ def extract_exif_metadata(image_path: str) -> Dict[str, Any]:
     }
     
     try:
-        # Get file size
-        file_size = os.path.getsize(image_path)
+        # Get file size using pathlib
+        file_path = Path(image_path)
+        file_size = file_path.stat().st_size
         metadata["file_size"] = file_size
         
         # Open image and get dimensions
