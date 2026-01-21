@@ -1,0 +1,147 @@
+Third-Party Software Licenses
+=============================
+
+PhotoSense-AI incorporates and depends on the following open-source software.
+We gratefully acknowledge the contributions of these projects and their authors.
+
+-------------------------------------------------------------------------------
+
+1. Ultralytics YOLOv8
+   License: AGPL-3.0
+   Website: https://ultralytics.com
+   Repository: https://github.com/ultralytics/ultralytics
+   Purpose: Object detection and image classification
+
+2. InsightFace
+   License: MIT
+   Repository: https://github.com/deepinsight/insightface
+   Purpose: Face detection (RetinaFace) and face embeddings (ArcFace)
+
+3. OpenAI CLIP
+   License: MIT
+   Repository: https://github.com/openai/CLIP
+   Purpose: Image and text embeddings for semantic search
+
+4. FAISS (Facebook AI Similarity Search)
+   License: MIT
+   Repository: https://github.com/facebookresearch/faiss
+   Purpose: Efficient vector similarity search
+
+5. Transformers (Hugging Face)
+   License: Apache-2.0
+   Repository: https://github.com/huggingface/transformers
+   Purpose: ML model loading and inference (CLIP, Florence-2)
+
+6. PyTorch
+   License: BSD-3-Clause
+   Website: https://pytorch.org
+   Repository: https://github.com/pytorch/pytorch
+   Purpose: Deep learning framework
+
+7. FastAPI
+   License: MIT
+   Website: https://fastapi.tiangolo.com
+   Repository: https://github.com/tiangolo/fastapi
+   Purpose: Backend REST API framework
+
+8. Uvicorn
+   License: BSD-3-Clause
+   Repository: https://github.com/encode/uvicorn
+   Purpose: ASGI server for FastAPI
+
+9. Pydantic
+   License: MIT
+   Repository: https://github.com/pydantic/pydantic
+   Purpose: Data validation and settings management
+
+10. OpenCV (opencv-python)
+    License: Apache-2.0
+    Website: https://opencv.org
+    Repository: https://github.com/opencv/opencv-python
+    Purpose: Image processing and computer vision utilities
+
+11. Pillow (PIL)
+    License: HPND (Historical Permission Notice and Disclaimer)
+    Repository: https://github.com/python-pillow/Pillow
+    Purpose: Image loading and manipulation
+
+12. NumPy
+    License: BSD-3-Clause
+    Website: https://numpy.org
+    Repository: https://github.com/numpy/numpy
+    Purpose: Numerical computing and array operations
+
+13. scikit-learn
+    License: BSD-3-Clause
+    Website: https://scikit-learn.org
+    Repository: https://github.com/scikit-learn/scikit-learn
+    Purpose: Face clustering (DBSCAN algorithm)
+
+14. ONNX Runtime
+    License: MIT
+    Repository: https://github.com/microsoft/onnxruntime
+    Purpose: ML model inference optimization
+
+15. Tauri
+    License: MIT OR Apache-2.0
+    Website: https://tauri.app
+    Repository: https://github.com/tauri-apps/tauri
+    Purpose: Desktop application framework
+
+16. React
+    License: MIT
+    Website: https://react.dev
+    Repository: https://github.com/facebook/react
+    Purpose: Frontend UI framework
+
+17. Vite
+    License: MIT
+    Website: https://vitejs.dev
+    Repository: https://github.com/vitejs/vite
+    Purpose: Frontend build tool
+
+18. Tailwind CSS
+    License: MIT
+    Website: https://tailwindcss.com
+    Repository: https://github.com/tailwindlabs/tailwindcss
+    Purpose: CSS styling framework
+
+19. Axios
+    License: MIT
+    Repository: https://github.com/axios/axios
+    Purpose: HTTP client for API requests
+
+20. Leaflet
+    License: BSD-2-Clause
+    Website: https://leafletjs.com
+    Repository: https://github.com/Leaflet/Leaflet
+    Purpose: Interactive map visualization
+
+21. Lucide React
+    License: ISC
+    Repository: https://github.com/lucide-icons/lucide
+    Purpose: Icon library
+
+22. timm (PyTorch Image Models)
+    License: Apache-2.0
+    Repository: https://github.com/huggingface/pytorch-image-models
+    Purpose: Image model architectures
+
+23. einops
+    License: MIT
+    Repository: https://github.com/arogozhnikov/einops
+    Purpose: Tensor operations for ML models
+
+24. aiohttp
+    License: Apache-2.0
+    Repository: https://github.com/aio-libs/aiohttp
+    Purpose: Async HTTP client/server
+
+-------------------------------------------------------------------------------
+
+Full license texts for each dependency can be found in their respective
+repositories linked above, or in the installed package directories.
+
+This list may not be exhaustive. Additional transitive dependencies may have
+their own licenses. Run `pip show <package>` or check `node_modules/<package>`
+for complete license information.

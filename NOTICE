@@ -1,0 +1,62 @@
+PhotoSense-AI
+Copyright (c) 2026 Abhishek Anand. All Rights Reserved.
+
+================================================================================
+
+This product is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). See the LICENSE file for the full license text.
+
+================================================================================
+
+NOTICE OF THIRD-PARTY SOFTWARE
+
+This software includes and depends on third-party open-source software
+components. Each component is licensed under its respective license terms.
+See LICENSE-THIRD-PARTY for a complete list of dependencies and their licenses.
+
+Key dependencies include:
+- Ultralytics YOLOv8 (AGPL-3.0) - Object detection
+- InsightFace (MIT) - Face detection and recognition
+- OpenAI CLIP (MIT) - Image-text embeddings
+- FAISS (MIT) - Vector similarity search
+- FastAPI (MIT) - Backend API framework
+- Tauri (MIT/Apache-2.0) - Desktop application framework
+- React (MIT) - Frontend UI framework
+- PyTorch (BSD-3-Clause) - Deep learning framework
+
+================================================================================
+
+ATTRIBUTION
+
+This software was created by Abhishek Anand.
+
+Project Repository: https://github.com/abhishekanand16/PhotoSense-AI
+
+================================================================================
+
+TRADEMARK NOTICE
+
+"PhotoSense-AI" is a trademark of Abhishek Anand. Use of this trademark
+is subject to applicable trademark laws.
+
+================================================================================
+
+PRIVACY NOTICE
+
+PhotoSense-AI is designed with privacy as a core principle:
+- All processing occurs locally on your device
+- No data is transmitted to external servers
+- No telemetry or usage tracking is performed
+- Your photos and metadata remain under your control
+
+================================================================================
+
+DISCLAIMER
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

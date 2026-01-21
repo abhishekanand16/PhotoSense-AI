@@ -301,7 +301,17 @@ Contributions are welcome! Please:
 
 ## License
 
-[Add your license here]
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+
+This means:
+- You can use, modify, and distribute this software
+- If you modify and distribute it, you must release your changes under AGPL-3.0
+- If you run a modified version as a network service, you must provide source code access
+- You must preserve copyright notices and attribution
+
+See the [LICENSE](LICENSE) file for the full license text.
+
+For third-party software licenses, see [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
 
 ## Acknowledgments
 
