@@ -257,12 +257,46 @@ const SettingsView: React.FC = () => {
                 AI Status
               </h2>
             </div>
-            <Card className="p-6">
-              <div className="flex items-center gap-4 mb-4">
+            <Card className={`p-6 relative overflow-hidden transition-all duration-500 ${isScanning ? 'border-brand-primary/50 shadow-lg shadow-brand-primary/10' : ''}`}>
+              {/* Animated background gradient when scanning */}
+              {isScanning && (
+                <div className="absolute inset-0 overflow-hidden">
+                  <div 
+                    className="absolute inset-0 bg-gradient-to-r from-transparent via-brand-primary/5 to-transparent"
+                    style={{
+                      animation: 'shimmer 2s ease-in-out infinite',
+                    }}
+                  />
+                  <div 
+                    className="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-brand-primary via-brand-secondary to-brand-primary rounded-full"
+                    style={{
+                      width: `${globalStatus.progress_percent}%`,
+                      transition: 'width 0.5s ease-out',
+                      boxShadow: '0 0 10px rgba(var(--brand-primary-rgb, 99, 102, 241), 0.5)',
+                    }}
+                  />
+                </div>
+              )}
+              
+              <div className="flex items-center gap-4 mb-4 relative z-10">
                 <div className="relative">
-                  <div className={`w-3 h-3 rounded-full ${isScanning ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)]' : 'bg-light-text-tertiary dark:bg-dark-text-tertiary opacity-30'}`} />
-                  {isScanning && (
-                    <div className="absolute inset-0 w-3 h-3 rounded-full bg-emerald-500 animate-ping opacity-40" />
+                  {isScanning ? (
+                    <div className="relative w-12 h-12 flex items-center justify-center">
+                      {/* Outer rotating ring */}
+                      <div 
+                        className="absolute inset-0 rounded-full border-2 border-transparent border-t-brand-primary border-r-brand-primary/50"
+                        style={{ animation: 'spin 1.5s linear infinite' }}
+                      />
+                      {/* Middle pulsing ring */}
+                      <div 
+                        className="absolute inset-1 rounded-full border-2 border-transparent border-b-brand-secondary border-l-brand-secondary/50"
+                        style={{ animation: 'spin 2s linear infinite reverse' }}
+                      />
+                      {/* Center icon */}
+                      <Cpu size={18} className="text-brand-primary animate-pulse" />
+                    </div>
+                  ) : (
+                    <div className={`w-3 h-3 rounded-full ${globalStatus.status === 'error' ? 'bg-red-500' : globalStatus.status === 'completed' || globalStatus.total_photos > 0 ? 'bg-emerald-500' : 'bg-light-text-tertiary dark:bg-dark-text-tertiary opacity-30'}`} />
                   )}
                 </div>
                 <div className="flex-1">
@@ -288,14 +322,42 @@ const SettingsView: React.FC = () => {
                   </p>
                 </div>
                 {isScanning && (
-                  <div className="text-lg font-black text-brand-primary">
-                    {globalStatus.progress_percent}%
+                  <div className="flex flex-col items-end">
+                    <div className="text-2xl font-black text-brand-primary tabular-nums">
+                      {globalStatus.progress_percent}%
+                    </div>
+                    <div className="text-xs text-light-text-tertiary dark:text-dark-text-tertiary">
+                      {globalStatus.processed_photos}/{globalStatus.total_photos}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {stats && (
-                <div className="flex items-center gap-2 px-3 py-2 bg-light-bg dark:bg-dark-bg/50 rounded-xl border border-light-border dark:border-dark-border">
+              {/* Progress bar when scanning */}
+              {isScanning && (
+                <div className="mb-4 relative z-10">
+                  <div className="h-2 bg-light-bg dark:bg-dark-bg/50 rounded-full overflow-hidden border border-light-border dark:border-dark-border">
+                    <div 
+                      className="h-full bg-gradient-to-r from-brand-primary to-brand-secondary rounded-full relative"
+                      style={{
+                        width: `${globalStatus.progress_percent}%`,
+                        transition: 'width 0.5s ease-out',
+                      }}
+                    >
+                      {/* Animated shine effect on progress bar */}
+                      <div 
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+                        style={{
+                          animation: 'shimmer 1.5s ease-in-out infinite',
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {stats && !isScanning && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-light-bg dark:bg-dark-bg/50 rounded-xl border border-light-border dark:border-dark-border relative z-10">
                   <BarChart3 size={14} className="text-brand-primary" />
                   <span className="text-xs font-medium text-light-text-secondary dark:text-dark-text-secondary">
                     Photos Processed:
