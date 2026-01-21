@@ -16,7 +16,7 @@ fn spawn_backend(app_handle: &tauri::AppHandle) -> Result<tauri::api::process::C
     use tauri::api::process::{Command, CommandEvent};
     
     // Try sidecar first (production build)
-    let sidecar_result = Command::new_sidecar("photosense-backend");
+    let sidecar_result = Command::new_sidecar("binaries/photosense-backend");
     
     match sidecar_result {
         Ok(sidecar_cmd) => {

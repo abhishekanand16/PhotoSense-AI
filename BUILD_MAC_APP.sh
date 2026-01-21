@@ -92,7 +92,9 @@ echo ""
 echo "[5/6] Building Tauri app (this takes 5-10 minutes)..."
 
 # Copy backend to Tauri binaries
-mkdir -p "$PROJECT_ROOT/apps/desktop/src-tauri/binaries"
+BINARIES_DIR="$PROJECT_ROOT/apps/desktop/src-tauri/binaries"
+rm -rf "$BINARIES_DIR"
+mkdir -p "$BINARIES_DIR"
 
 # Determine architecture
 ARCH=$(uname -m)
@@ -102,10 +104,15 @@ else
     TARGET="x86_64-apple-darwin"
 fi
 
-# Copy entire backend bundle
-cp -r "$PROJECT_ROOT/packaging/backend/dist/photosense-backend/"* "$PROJECT_ROOT/apps/desktop/src-tauri/binaries/"
-mv "$PROJECT_ROOT/apps/desktop/src-tauri/binaries/photosense-backend" "$PROJECT_ROOT/apps/desktop/src-tauri/binaries/photosense-backend-$TARGET"
-chmod +x "$PROJECT_ROOT/apps/desktop/src-tauri/binaries/photosense-backend-$TARGET"
+# Copy entire backend bundle (all files needed for PyInstaller bundle)
+cp -r "$PROJECT_ROOT/packaging/backend/dist/photosense-backend/"* "$BINARIES_DIR/"
+
+# Rename main executable with target triple (Tauri requirement)
+mv "$BINARIES_DIR/photosense-backend" "$BINARIES_DIR/photosense-backend-$TARGET"
+chmod +x "$BINARIES_DIR/photosense-backend-$TARGET"
+
+echo "  Backend copied to: $BINARIES_DIR"
+echo "  Executable: photosense-backend-$TARGET"
 
 # Update tauri.conf.json to include sidecar
 cd "$PROJECT_ROOT/apps/desktop"
