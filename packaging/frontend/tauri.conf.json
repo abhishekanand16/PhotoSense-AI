@@ -1,0 +1,143 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "PhotoSense-AI",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true,
+        "sidecar": true,
+        "execute": false,
+        "scope": [
+          {
+            "name": "photosense-backend",
+            "sidecar": true,
+            "args": true
+          }
+        ]
+      },
+      "dialog": {
+        "all": false,
+        "open": true,
+        "save": false,
+        "message": true,
+        "ask": true
+      },
+      "fs": {
+        "all": false,
+        "readFile": true,
+        "readDir": true,
+        "scope": [
+          "$APPDATA/**",
+          "$APPDATA/PhotoSense-AI/**",
+          "$DOCUMENT/**",
+          "$PICTURE/**",
+          "$HOME/**",
+          "**"
+        ]
+      },
+      "path": {
+        "all": true
+      },
+      "protocol": {
+        "asset": true,
+        "assetScope": [
+          "$APPDATA/**",
+          "$APPDATA/PhotoSense-AI/**",
+          "$DOCUMENT/**",
+          "$PICTURE/**",
+          "$HOME/**",
+          "**"
+        ]
+      },
+      "process": {
+        "all": false,
+        "exit": true,
+        "relaunch": true
+      },
+      "window": {
+        "all": false,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "maximize": true,
+        "minimize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "startDragging": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "Photography",
+      "copyright": "Copyright © 2024 PhotoSense-AI",
+      "externalBin": [
+        "photosense-backend"
+      ],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.photosense.ai",
+      "longDescription": "PhotoSense-AI is a privacy-focused desktop application that uses AI to automatically organize and search your photos. All processing happens locally on your device.",
+      "shortDescription": "AI-powered local photo organizer",
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": null,
+        "frameworks": [],
+        "minimumSystemVersion": "10.15",
+        "providerShortName": null,
+        "signingIdentity": null
+      },
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": "",
+        "wix": null,
+        "nsis": {
+          "installerIcon": "icons/icon.ico",
+          "headerImage": null,
+          "sidebarImage": null,
+          "license": null,
+          "installMode": "currentUser",
+          "languages": ["English"],
+          "displayLanguageSelector": false
+        }
+      },
+      "targets": ["dmg", "nsis"]
+    },
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost https://*.tile.openstreetmap.org https://unpkg.com data:; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' https://unpkg.com; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 https://nominatim.openstreetmap.org"
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "PhotoSense-AI",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 650,
+        "center": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ]
+  }
+}

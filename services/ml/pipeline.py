@@ -743,8 +743,9 @@ class MLPipeline:
         self, 
         query_text: str, 
         k: int = 10,
-        min_similarity: float = 0.20
-    ) -> List[int]:
+        min_similarity: float = 0.20,
+        return_scores: bool = False
+    ) -> List:
         """
         Search for similar images using text query with similarity filtering.
         
@@ -756,9 +757,12 @@ class MLPipeline:
                            - 0.30+ = Strong match (very relevant)
                            - 0.20-0.30 = Moderate match (somewhat relevant)
                            - <0.20 = Weak match (filtered out as noise)
+            return_scores: If True, returns list of (photo_id, similarity) tuples.
+                          If False (default), returns list of photo_ids only.
         
         Returns:
-            List of photo IDs that match the query above the similarity threshold
+            If return_scores=False: List of photo IDs that match the query
+            If return_scores=True: List of (photo_id, similarity) tuples
         """
         import logging
         
@@ -783,17 +787,20 @@ class MLPipeline:
             
             if similarity >= min_similarity:
                 filtered_results.append((int(pid), similarity))
-                logging.info(f"CLIP match: photo_id={pid}, similarity={similarity:.3f}")
+                logging.debug(f"CLIP match: photo_id={pid}, similarity={similarity:.3f}")
             else:
-                logging.info(f"CLIP filtered out: photo_id={pid}, similarity={similarity:.3f} < {min_similarity}")
+                logging.debug(f"CLIP filtered out: photo_id={pid}, similarity={similarity:.3f} < {min_similarity}")
         
         # Sort by similarity (highest first) and return top k
         filtered_results.sort(key=lambda x: x[1], reverse=True)
+        filtered_results = filtered_results[:k]
         
-        result_ids = [pid for pid, _ in filtered_results[:k]]
-        logging.info(f"CLIP search '{query_text}': {len(result_ids)} results above threshold {min_similarity} (from {candidates_k} candidates)")
+        logging.info(f"CLIP search '{query_text}': {len(filtered_results)} results above threshold {min_similarity} (from {candidates_k} candidates)")
         
-        return result_ids
+        if return_scores:
+            return filtered_results
+        else:
+            return [pid for pid, _ in filtered_results]
 
     async def search_similar_faces(self, face_id: int, k: int = 10) -> List[Dict]:
         """

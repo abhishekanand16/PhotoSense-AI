@@ -134,6 +134,11 @@ async def delete_photo(photo_id: int):
                     logging.info(f"Deleted file: {file_path}")
                 else:
                     logging.warning(f"File not found or not a file: {file_path}")
+            except PermissionError as e:
+                # Windows file lock - file may be open in another app
+                logging.warning(f"Cannot delete file (may be in use): {file_path}: {e}")
+            except OSError as e:
+                logging.error(f"OS error deleting file {file_path}: {e}")
             except Exception as e:
                 logging.error(f"Failed to delete file {file_path}: {str(e)}")
                 # File deletion failure is not critical
@@ -197,6 +202,11 @@ async def delete_photos(photo_ids: List[int]):
                                 file_path_obj.unlink()
                                 files_deleted += 1
                                 logging.info(f"Deleted file: {file_path}")
+                        except PermissionError as e:
+                            # Windows file lock - file may be open in another app
+                            logging.warning(f"Cannot delete file (may be in use): {file_path}: {e}")
+                        except OSError as e:
+                            logging.error(f"OS error deleting file {file_path}: {e}")
                         except Exception as e:
                             logging.error(f"Failed to delete file {file_path}: {str(e)}")
                 else:

@@ -1232,54 +1232,47 @@ class SQLiteStore:
     def set_faces_person_locked(self, face_ids: List[int], locked: bool = True) -> None:
         if not face_ids:
             return
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        cursor = conn.cursor()
-        placeholders = ','.join('?' * len(face_ids))
-        cursor.execute(
-            f"UPDATE faces SET person_locked = ? WHERE id IN ({placeholders})",
-            [1 if locked else 0] + face_ids,
-        )
-        conn.commit()
-        conn.close()
+        with self._transaction() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join('?' * len(face_ids))
+            cursor.execute(
+                f"UPDATE faces SET person_locked = ? WHERE id IN ({placeholders})",
+                [1 if locked else 0] + face_ids,
+            )
 
     def set_faces_suppressed(self, face_ids: List[int], suppressed: bool = True) -> None:
         if not face_ids:
             return
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        cursor = conn.cursor()
-        placeholders = ','.join('?' * len(face_ids))
-        cursor.execute(
-            f"UPDATE faces SET suppressed = ? WHERE id IN ({placeholders})",
-            [1 if suppressed else 0] + face_ids,
-        )
-        conn.commit()
-        conn.close()
+        with self._transaction() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join('?' * len(face_ids))
+            cursor.execute(
+                f"UPDATE faces SET suppressed = ? WHERE id IN ({placeholders})",
+                [1 if suppressed else 0] + face_ids,
+            )
     
     def get_face(self, face_id: int) -> Optional[Dict]:
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM faces WHERE id = ?", (face_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        with self._get_connection(readonly=True) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM faces WHERE id = ?", (face_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
     
     def get_faces_without_clusters(self) -> List[Dict]:
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM faces WHERE cluster_id IS NULL AND suppressed = 0 AND person_locked = 0")
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+        with self._get_connection(readonly=True) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM faces WHERE cluster_id IS NULL AND suppressed = 0 AND person_locked = 0")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
     
     def count_faces_without_clusters(self) -> int:
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL AND suppressed = 0 AND person_locked = 0")
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
+        with self._get_connection(readonly=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL AND suppressed = 0 AND person_locked = 0")
+            count = cursor.fetchone()[0]
+            return count
 
     # =========================================================================
     # PET IDENTITY METHODS (parallel to face/people methods)
