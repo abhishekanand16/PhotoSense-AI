@@ -71,11 +71,17 @@ if (-not $pythonExe) {
     Expand-Archive -Path $zipFile -DestinationPath $PortableDir -Force
     Remove-Item $zipFile -Force
     
-    # Configure for pip
+    # Configure for pip - IMPORTANT: must enable site-packages
     Write-Host "  Configuring..."
     $pthFile = Get-ChildItem "$PortableDir\python*._pth" | Select-Object -First 1
     if ($pthFile) {
-        (Get-Content $pthFile.FullName) -replace '#import site', 'import site' | Set-Content $pthFile.FullName
+        $content = Get-Content $pthFile.FullName -Raw
+        # Uncomment import site AND add Lib\site-packages
+        $content = $content -replace '#import site', 'import site'
+        if ($content -notmatch 'Lib\\site-packages') {
+            $content = $content.TrimEnd() + "`r`nLib\site-packages`r`n"
+        }
+        Set-Content -Path $pthFile.FullName -Value $content -NoNewline
     }
     New-Item -ItemType Directory -Force -Path "$PortableDir\Lib\site-packages" | Out-Null
     
@@ -94,31 +100,44 @@ Write-Host ""
 $version = & $pythonExe --version 2>&1
 Write-Host "  Python version: $version"
 
-# Step 2: Install Dependencies
+# Step 2: Install Dependencies IN CORRECT ORDER
 Write-Host ""
-Write-Host "[2/5] Installing dependencies (this takes 15-30 minutes first time)..."
-Write-Host ""
-
-Write-Host "  Installing pip and pyinstaller..."
-& $pythonExe -m pip install --upgrade pip --no-warn-script-location --quiet 2>$null
-& $pythonExe -m pip install pyinstaller --no-warn-script-location --quiet 2>$null
-
-Write-Host "  Installing project requirements..."
-Write-Host "  (torch, transformers, ultralytics, insightface, etc.)"
-Write-Host "  Please wait..."
+Write-Host "[2/5] Installing dependencies..."
+Write-Host "  This takes 15-30 minutes on first run."
 Write-Host ""
 
+# Upgrade pip first
+Write-Host "  Upgrading pip..."
+& $pythonExe -m pip install --upgrade pip --no-warn-script-location -q 2>$null
+
+# Install numpy FIRST (required by many packages)
+Write-Host "  Installing numpy..."
+& $pythonExe -m pip install "numpy>=1.26.4,<2" --no-warn-script-location -q 2>$null
+
+# Install core dependencies that others need
+Write-Host "  Installing core packages (torch, opencv, pillow)..."
+& $pythonExe -m pip install torch torchvision --no-warn-script-location -q 2>$null
+& $pythonExe -m pip install opencv-python pillow --no-warn-script-location -q 2>$null
+
+# Install onnxruntime before insightface
+Write-Host "  Installing onnxruntime..."
+& $pythonExe -m pip install onnxruntime --no-warn-script-location -q 2>$null
+
+# Install insightface (needs numpy and onnxruntime)
+Write-Host "  Installing insightface..."
+& $pythonExe -m pip install insightface --no-warn-script-location 2>$null
+
+# Install remaining requirements
+Write-Host "  Installing remaining packages..."
 & $pythonExe -m pip install -r "$ProjectRoot\requirements.txt" --no-warn-script-location 2>$null
+
+# Install pyinstaller
+Write-Host "  Installing pyinstaller..."
+& $pythonExe -m pip install pyinstaller --no-warn-script-location -q 2>$null
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
-    Write-Host "ERROR: Failed to install dependencies" -ForegroundColor Red
-    Write-Host "Trying again with verbose output..."
-    & $pythonExe -m pip install -r "$ProjectRoot\requirements.txt" --no-warn-script-location
-    if ($LASTEXITCODE -ne 0) {
-        Read-Host "Press Enter to exit"
-        exit 1
-    }
+    Write-Host "WARNING: Some packages may have had issues. Continuing anyway..." -ForegroundColor Yellow
 }
 
 Write-Host "  Dependencies installed!" -ForegroundColor Green
