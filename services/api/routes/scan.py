@@ -6,7 +6,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterator, Set
+from typing import Dict, Iterator, Optional, Set
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
