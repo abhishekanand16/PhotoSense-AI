@@ -2,15 +2,6 @@
 # Build PhotoSense-AI Frontend (Tauri) for Windows
 # Creates the .exe installer with the backend sidecar
 #
-# PREREQUISITES:
-#   1. Node.js 18+ (https://nodejs.org)
-#   2. Rust (https://rustup.rs)
-#   3. Backend must be built first (run build-windows.bat in backend folder)
-#
-# USAGE:
-#   Option 1: .\build-windows.ps1
-#   Option 2: Double-click build-windows.bat (recommended)
-#
 
 $ErrorActionPreference = "Stop"
 
@@ -30,59 +21,24 @@ Write-Host "Output dir: $OutputDir"
 Write-Host ""
 
 # Check prerequisites
-Write-Host "Checking prerequisites..."
-Write-Host ""
-
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
-    Write-Host "============================================================"
     Write-Host "ERROR: Node.js is required but not installed."
-    Write-Host "============================================================"
-    Write-Host ""
-    Write-Host "Please install Node.js:"
-    Write-Host "  1. Go to https://nodejs.org"
-    Write-Host "  2. Download the LTS version (18.x or 20.x)"
-    Write-Host "  3. Run the installer"
-    Write-Host "  4. Restart this script"
-    Write-Host ""
-    Write-Host "Or use winget (Windows 11):"
-    Write-Host "  winget install OpenJS.NodeJS.LTS"
-    Write-Host ""
+    Write-Host "Download from: https://nodejs.org"
     exit 1
 }
 
 $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
 if (-not $cargoCmd) {
-    Write-Host "============================================================"
     Write-Host "ERROR: Rust is required but not installed."
-    Write-Host "============================================================"
-    Write-Host ""
-    Write-Host "Please install Rust:"
-    Write-Host "  1. Go to https://rustup.rs"
-    Write-Host "  2. Download and run rustup-init.exe"
-    Write-Host "  3. Follow the prompts (default options are fine)"
-    Write-Host "  4. Restart your terminal and this script"
-    Write-Host ""
-    Write-Host "Or use winget (Windows 11):"
-    Write-Host "  winget install Rustlang.Rustup"
-    Write-Host ""
+    Write-Host "Download from: https://rustup.rs"
     exit 1
 }
 
 # Check if backend was built
 if (-not (Test-Path "$BackendDir\photosense-backend.exe")) {
-    Write-Host "============================================================"
-    Write-Host "ERROR: Backend not found!"
-    Write-Host "============================================================"
-    Write-Host ""
-    Write-Host "The backend must be built before the frontend."
-    Write-Host "Please run the backend build first:"
-    Write-Host ""
-    Write-Host "  cd $PackagingDir\backend"
-    Write-Host "  .\build-windows.bat"
-    Write-Host ""
-    Write-Host "Then run this script again."
-    Write-Host ""
+    Write-Host "ERROR: Backend not found at $BackendDir"
+    Write-Host "Run .\backend\build-windows.ps1 first"
     exit 1
 }
 

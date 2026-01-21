@@ -12,28 +12,11 @@ cd packaging
 Output: `dist/PhotoSense-AI-1.0.0-macos.dmg`
 
 ### Windows (creates .exe installer)
-
-**Option 1: Double-click (Recommended)**
-1. Navigate to the `packaging` folder in File Explorer
-2. Double-click `build-windows.bat`
-3. Follow the prompts
-
-**Option 2: PowerShell (if you get execution policy errors)**
 ```powershell
-cd packaging
-powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
-```
-
-**Option 3: Enable scripts permanently (requires admin)**
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 cd packaging
 .\build-windows.ps1
 ```
-
 Output: `dist\PhotoSense-AI-1.0.0-windows-setup.exe`
-
-> **Note:** If Python is not installed, the script will offer to download a portable version automatically.
 
 ## What Gets Built
 
@@ -82,17 +65,11 @@ packaging/
 
 ### Windows Build Machine
 - Windows 10/11
-- **For backend only**: No prerequisites! Script auto-downloads portable Python if needed.
-- **For full app build**:
-  - Node.js 18+: https://nodejs.org (or `winget install OpenJS.NodeJS.LTS`)
-  - Rust: https://rustup.rs (or `winget install Rustlang.Rustup`)
-  - Visual Studio Build Tools: Installed automatically with Rust
-
-> **Tip:** On Windows 11, you can install everything with:
-> ```
-> winget install OpenJS.NodeJS.LTS
-> winget install Rustlang.Rustup
-> ```
+- Visual Studio Build Tools (for Rust)
+- Rust: https://rustup.rs
+- Node.js 18+: https://nodejs.org
+- Python 3.10+: https://python.org
+- NSIS: https://nsis.sourceforge.io (for installer creation)
 
 ## Build Process Details
 
@@ -113,30 +90,6 @@ packaging/
 - **Windows**: Creates NSIS installer with Start Menu shortcuts
 
 ## Troubleshooting
-
-### Windows: "Execution of scripts is disabled on this system"
-This is a PowerShell security feature. Solutions:
-
-**Solution 1 (Recommended):** Use the `.bat` files instead
-- Double-click `build-windows.bat` - it bypasses the policy automatically
-
-**Solution 2:** Run PowerShell with bypass flag
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
-```
-
-**Solution 3:** Change execution policy permanently
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-### Windows: "Python not found"
-The build script will automatically offer to download a portable Python. Just press `Y` when prompted.
-
-If you prefer to install Python system-wide:
-1. Download from https://python.org/downloads
-2. **Important:** Check "Add Python to PATH" during installation
-3. Restart your terminal and try again
 
 ### "Backend failed to start"
 - Check if port 8000 is already in use
