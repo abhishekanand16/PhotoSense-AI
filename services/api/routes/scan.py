@@ -120,6 +120,28 @@ def _compute_eta_seconds(started_at: Optional[str], processed: int, total: int) 
     return int(remaining / rate)
 
 
+def _iter_image_paths(folder: Path, recursive: bool, image_extensions: Set[str]) -> Iterator[str]:
+    """
+    Yield image file paths from a folder without loading all into memory.
+    
+    Args:
+        folder: Path to scan
+        recursive: Whether to scan subdirectories
+        image_extensions: Set of valid image file extensions (lowercase, with dot)
+    
+    Yields:
+        String paths to image files
+    """
+    if recursive:
+        for p in folder.rglob("*"):
+            if p.is_file() and p.suffix.lower() in image_extensions:
+                yield str(p)
+    else:
+        for p in folder.iterdir():
+            if p.is_file() and p.suffix.lower() in image_extensions:
+                yield str(p)
+
+
 async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
     _update_job(job_id, status="processing", progress=0.0, message="Scanning folder...", phase="import")
     _update_global_state(
@@ -198,7 +220,9 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             try:
                 result = await pipeline.import_photo(image_path)
                 if result.get("status") in ["imported", "exists"]:
-                    imported_count += 1
+                    photo_id = result.get("photo_id")
+                    if photo_id:
+                        imported_photos.append((photo_id, image_path))
             except Exception as e:
                 logging.error(f"Failed to import {image_path}: {str(e)}")
 
@@ -228,7 +252,7 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             
             for photo_id, image_path in batch:
                 try:
-                    result = await pipeline.process_photo_ml(photo_id, path)
+                    result = await pipeline.process_photo_ml(photo_id, image_path)
                     processed += 1
                     faces_found = len(result.get("faces", []))
                     objects_found = len(result.get("objects", []))
