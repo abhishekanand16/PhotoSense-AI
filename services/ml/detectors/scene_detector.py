@@ -69,12 +69,23 @@ class SceneDetector:
             import os
             os.environ['TORCH_HOME'] = os.path.expanduser('~/.cache/torch')
             
-            self.model = torch.hub.load(
-                'CSAILVision/places365',
-                'resnet50',
-                pretrained=True,
-                skip_validation=True  # Skip validation to work offline if cached
-            )
+            # Silence torch hub's noisy "Using cache found ..." output when cached.
+            try:
+                self.model = torch.hub.load(
+                    'CSAILVision/places365',
+                    'resnet50',
+                    pretrained=True,
+                    skip_validation=True,  # Skip validation to work offline if cached
+                    verbose=False,
+                )
+            except TypeError:
+                # Older torch versions may not support verbose=
+                self.model = torch.hub.load(
+                    'CSAILVision/places365',
+                    'resnet50',
+                    pretrained=True,
+                    skip_validation=True
+                )
             self.model.eval()
             self.model.to(self.device)
             
