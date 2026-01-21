@@ -1,5 +1,3 @@
-"""SQLite database for metadata storage."""
-
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -8,43 +6,61 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+import logging
+from services.config import DB_PATH, DB_SCHEMA_VERSION
+
+
+class SchemaVersionError(RuntimeError):
+    pass
 
 
 class SQLiteStore:
-    """Manages SQLite database for photo metadata, faces, objects, and clusters."""
-
-    # Class-level lock for write serialization
     _write_lock = threading.Lock()
 
-    def __init__(self, db_path: str = "photosense.db"):
-        """Initialize database connection."""
+    def __init__(self, db_path: str = str(DB_PATH), readonly: bool = False):
         self.db_path = db_path
-        self._init_schema()
+        self._readonly = readonly
+        if not self._readonly:
+            self._init_schema()
+        self._validate_schema_version()
 
-    def _configure_connection(self, conn: sqlite3.Connection, readonly: bool = False) -> None:
-        """
-        Configure SQLite connection pragmas.
-
-        IMPORTANT: SQLite foreign keys are disabled by default and must be enabled
-        per-connection. We enable them for ALL connections to ensure ON DELETE CASCADE
-        and referential integrity behave as expected.
-        """
+    def _connect(self, readonly: bool = False) -> sqlite3.Connection:
+        is_readonly = readonly or self._readonly
+        if is_readonly:
+            if not Path(self.db_path).exists():
+                raise FileNotFoundError(self.db_path)
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", timeout=30, uri=True)
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        if readonly:
+        if is_readonly:
             conn.execute("PRAGMA query_only=ON")
-
-    def _connect(self, readonly: bool = False) -> sqlite3.Connection:
-        """Create a configured SQLite connection."""
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        self._configure_connection(conn, readonly=readonly)
         return conn
+
+    def _get_user_version(self, conn: sqlite3.Connection) -> int:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA user_version")
+        row = cursor.fetchone()
+        return int(row[0] or 0)
+
+    def _validate_schema_version(self) -> None:
+        try:
+            with self._get_connection(readonly=True) as conn:
+                current_version = self._get_user_version(conn)
+                if current_version not in (0, DB_SCHEMA_VERSION):
+                    logging.error(
+                        "Schema version mismatch: db=%s expected=%s",
+                        current_version,
+                        DB_SCHEMA_VERSION,
+                    )
+                    raise SchemaVersionError("Database schema version mismatch")
+        except FileNotFoundError:
+            return
 
     @contextmanager
     def _get_connection(self, readonly: bool = False):
-        """Context manager for database connections with WAL mode."""
         conn = self._connect(readonly=readonly)
         try:
             yield conn
@@ -53,7 +69,6 @@ class SQLiteStore:
 
     @contextmanager
     def _transaction(self):
-        """Context manager for write transactions with locking."""
         with self._write_lock:
             conn = self._connect(readonly=False)
             try:
@@ -66,7 +81,6 @@ class SQLiteStore:
                 conn.close()
 
     def _init_schema(self) -> None:
-        """Create database tables if they don't exist."""
         conn = self._connect(readonly=False)
         cursor = conn.cursor()
 
@@ -122,6 +136,16 @@ class SQLiteStore:
                 FOREIGN KEY (person_id) REFERENCES people(id)
             )
         """)
+
+        try:
+            cursor.execute("PRAGMA table_info(faces)")
+            face_columns = {row[1] for row in cursor.fetchall()}
+            if "person_locked" not in face_columns:
+                cursor.execute("ALTER TABLE faces ADD COLUMN person_locked INTEGER NOT NULL DEFAULT 0")
+            if "suppressed" not in face_columns:
+                cursor.execute("ALTER TABLE faces ADD COLUMN suppressed INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
 
         # Objects table
         cursor.execute("""
@@ -369,6 +393,10 @@ class SQLiteStore:
             pass
 
         conn.commit()
+        current_version = self._get_user_version(conn)
+        if current_version == 0:
+            conn.execute(f"PRAGMA user_version = {DB_SCHEMA_VERSION}")
+            conn.commit()
         conn.close()
 
     def add_photo(
@@ -1053,30 +1081,25 @@ class SQLiteStore:
             raise e
 
     def get_statistics(self) -> Dict:
-        """Get database statistics."""
-        conn = self._connect(readonly=True)
-        cursor = conn.cursor()
-        stats = {}
-        cursor.execute("SELECT COUNT(*) FROM photos")
-        stats["total_photos"] = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM faces")
-        stats["total_faces"] = cursor.fetchone()[0]
-        # Exclude 'person' and 'other' categories from objects count
-        # 'person' is handled in People tab, 'other' is too generic to be useful
-        cursor.execute("SELECT COUNT(*) FROM objects WHERE category NOT IN ('person', 'other')")
-        stats["total_objects"] = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM people")
-        stats["total_people"] = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(DISTINCT person_id) FROM faces WHERE person_id IS NOT NULL")
-        stats["labeled_faces"] = cursor.fetchone()[0]
-        # Count photos with GPS location data
-        try:
-            cursor.execute("SELECT COUNT(*) FROM photo_locations WHERE has_location = 1")
-            stats["total_locations"] = cursor.fetchone()[0]
-        except Exception:
-            stats["total_locations"] = 0
-        conn.close()
-        return stats
+        with self._get_connection(readonly=True) as conn:
+            cursor = conn.cursor()
+            stats = {}
+            cursor.execute("SELECT COUNT(*) FROM photos")
+            stats["total_photos"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM faces")
+            stats["total_faces"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM objects WHERE category NOT IN ('person', 'other')")
+            stats["total_objects"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM people")
+            stats["total_people"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(DISTINCT person_id) FROM faces WHERE person_id IS NOT NULL")
+            stats["labeled_faces"] = cursor.fetchone()[0]
+            try:
+                cursor.execute("SELECT COUNT(*) FROM photo_locations WHERE has_location = 1")
+                stats["total_locations"] = cursor.fetchone()[0]
+            except Exception:
+                stats["total_locations"] = 0
+            return stats
     
     def store_embedding(self, face_id: int, embedding: np.ndarray) -> int:
         """Store face embedding. Returns embedding_id."""
@@ -1187,7 +1210,6 @@ class SQLiteStore:
         return dict(row) if row else None
     
     def update_faces_cluster(self, face_ids: List[int], cluster_id: int) -> None:
-        """Batch update cluster for multiple faces."""
         if not face_ids:
             return
         conn = self._connect(readonly=False)
@@ -1198,7 +1220,6 @@ class SQLiteStore:
         conn.close()
     
     def update_faces_person(self, face_ids: List[int], person_id: Optional[int]) -> None:
-        """Batch update person for multiple faces."""
         if not face_ids:
             return
         conn = self._connect(readonly=False)
@@ -1207,10 +1228,35 @@ class SQLiteStore:
         cursor.execute(f"UPDATE faces SET person_id = ? WHERE id IN ({placeholders})", [person_id] + face_ids)
         conn.commit()
         conn.close()
+
+    def set_faces_person_locked(self, face_ids: List[int], locked: bool = True) -> None:
+        if not face_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(face_ids))
+        cursor.execute(
+            f"UPDATE faces SET person_locked = ? WHERE id IN ({placeholders})",
+            [1 if locked else 0] + face_ids,
+        )
+        conn.commit()
+        conn.close()
+
+    def set_faces_suppressed(self, face_ids: List[int], suppressed: bool = True) -> None:
+        if not face_ids:
+            return
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(face_ids))
+        cursor.execute(
+            f"UPDATE faces SET suppressed = ? WHERE id IN ({placeholders})",
+            [1 if suppressed else 0] + face_ids,
+        )
+        conn.commit()
+        conn.close()
     
     def get_face(self, face_id: int) -> Optional[Dict]:
-        """Get face by ID."""
-        conn = self._connect(readonly=True)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM faces WHERE id = ?", (face_id,))
@@ -1219,20 +1265,18 @@ class SQLiteStore:
         return dict(row) if row else None
     
     def get_faces_without_clusters(self) -> List[Dict]:
-        """Get all faces that haven't been clustered yet."""
-        conn = self._connect(readonly=True)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM faces WHERE cluster_id IS NULL")
+        cursor.execute("SELECT * FROM faces WHERE cluster_id IS NULL AND suppressed = 0 AND person_locked = 0")
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
     
     def count_faces_without_clusters(self) -> int:
-        """Count faces that haven't been clustered yet."""
-        conn = self._connect(readonly=True)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL")
+        cursor.execute("SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL AND suppressed = 0 AND person_locked = 0")
         count = cursor.fetchone()[0]
         conn.close()
         return count

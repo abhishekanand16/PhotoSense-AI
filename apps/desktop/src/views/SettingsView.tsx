@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { scanApi, statsApi, healthApi, photosApi } from "../services/api";
+import React, { useEffect, useState, useRef } from "react";
+import { scanApi, statsApi, healthApi, photosApi, GlobalScanStatus } from "../services/api";
 import { openFolderDialog } from "../utils/tauri";
 import { useTheme } from "../components/common/ThemeProvider";
 import {
@@ -22,12 +22,20 @@ import Card from "../components/common/Card";
 
 const SettingsView: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
-  const [scanning, setScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState(0);
-  const [scanMessage, setScanMessage] = useState("");
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const [globalStatus, setGlobalStatus] = useState<GlobalScanStatus>({
+    status: "idle",
+    total_photos: 0,
+    processed_photos: 0,
+    progress_percent: 100,
+    message: "Ready",
+  });
   const [stats, setStats] = useState<any>(null);
   const [updatingMetadata, setUpdatingMetadata] = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+  const lastStatusRef = useRef<GlobalScanStatus["status"]>("idle");
+  const lastKnownActiveStatus = useRef<GlobalScanStatus | null>(null);
+  const consecutiveFailures = useRef(0);
 
   const faqItems = [
     {
@@ -60,12 +68,55 @@ const SettingsView: React.FC = () => {
     },
     {
       question: "Can I delete photos from the app?",
-      answer: "PhotoSense-AI only indexes and organizes your photos - it doesn't modify or delete your original files. To remove photos, delete them from your computer and re-import the folder."
+      answer: "Yes, you can delete photos from the app. When you delete a photo, it removes both the index entry AND the original file from your computer. Be careful - this action cannot be undone."
     }
   ];
 
   useEffect(() => {
     loadStats();
+  }, []);
+
+  useEffect(() => {
+    const pollStatus = async () => {
+      try {
+        const status = await scanApi.getGlobalStatus();
+        setGlobalStatus(status);
+        setIsBackendConnected(true);
+        consecutiveFailures.current = 0;
+        
+        // Track last known active scan status for resilience
+        if (status.status === "scanning" || status.status === "indexing") {
+          lastKnownActiveStatus.current = status;
+        } else {
+          lastKnownActiveStatus.current = null;
+        }
+        
+        if (status.status === "completed" && lastStatusRef.current !== "completed") {
+          await loadStats();
+          window.dispatchEvent(new CustomEvent('refresh-photos'));
+        }
+        if (status.status === "error" && lastStatusRef.current !== "error") {
+          alert(`Scan failed: ${status.error || status.message || "Unknown error"}`);
+        }
+        lastStatusRef.current = status.status;
+      } catch {
+        consecutiveFailures.current += 1;
+        
+        // If we had an active scan and this is just a temporary timeout,
+        // keep showing the last known progress instead of "Disconnected"
+        if (lastKnownActiveStatus.current && consecutiveFailures.current < 3) {
+          setGlobalStatus(lastKnownActiveStatus.current);
+          setIsBackendConnected(true);
+        } else {
+          setIsBackendConnected(false);
+          lastKnownActiveStatus.current = null;
+        }
+      }
+    };
+
+    pollStatus();
+    const interval = setInterval(pollStatus, 1000);
+    return () => clearInterval(interval);
   }, []);
 
   const loadStats = async () => {
@@ -79,17 +130,13 @@ const SettingsView: React.FC = () => {
 
   const handleSelectFolder = async () => {
     try {
-      console.log("Opening folder dialog...");
       const folderPath = await openFolderDialog();
 
       if (folderPath === null) {
-        // User cancelled the dialog
-        console.log("User cancelled folder selection");
         return;
       }
 
       if (folderPath) {
-        console.log("Selected folder:", folderPath);
         await handleScan(folderPath);
       } else {
         console.error("Invalid folder selection");
@@ -104,56 +151,15 @@ const SettingsView: React.FC = () => {
 
   const handleScan = async (folderPath: string) => {
     try {
-      // Check if API is available
       const isHealthy = await healthApi.check();
       if (!isHealthy) {
         alert("Cannot connect to backend API. Please make sure the server is running at http://localhost:8000\n\nStart it with: uvicorn services.api.main:app --reload --port 8000");
         return;
       }
 
-      setScanning(true);
-      setScanProgress(0);
-
-      const job = await scanApi.start(folderPath, true);
-      let hasRefreshedAfterImport = false;
-
-      const interval = setInterval(async () => {
-        try {
-          const status = await scanApi.getStatus(job.job_id);
-          setScanProgress(status.progress);
-          setScanMessage(status.message || "");
-
-          // Refresh photos after import phase completes (photos are now visible)
-          if (status.phase === "scanning" && !hasRefreshedAfterImport) {
-            hasRefreshedAfterImport = true;
-            window.dispatchEvent(new CustomEvent('refresh-photos'));
-            await loadStats();
-          }
-
-          if (status.status === "completed") {
-            clearInterval(interval);
-            setScanning(false);
-            setScanMessage("");
-            await loadStats();
-            // Final refresh to show any face/object data
-            window.dispatchEvent(new CustomEvent('refresh-photos'));
-          } else if (status.status === "error") {
-            clearInterval(interval);
-            setScanning(false);
-            setScanMessage("");
-            alert(`Scan failed: ${status.message || "Unknown error"}`);
-          }
-        } catch (error) {
-          console.error("Failed to get scan status:", error);
-          clearInterval(interval);
-          setScanning(false);
-          setScanMessage("");
-          alert(`Failed to get scan status: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }, 1000);
+      await scanApi.start(folderPath, true);
     } catch (error) {
       console.error("Failed to start scan:", error);
-      setScanning(false);
       alert(`Failed to start scan: ${error instanceof Error ? error.message : String(error)}\n\nMake sure the backend API is running at http://localhost:8000`);
     }
   };
@@ -163,7 +169,6 @@ const SettingsView: React.FC = () => {
       setUpdatingMetadata(true);
       await photosApi.updateMetadata();
       alert("Metadata update started in the background. Photos will be updated with date information and other metadata. This may take a few minutes.");
-      // Refresh stats after a delay
       setTimeout(async () => {
         await loadStats();
         window.dispatchEvent(new CustomEvent('refresh-photos'));
@@ -178,49 +183,31 @@ const SettingsView: React.FC = () => {
 
   const handleScanFaces = async () => {
     try {
-      // Check if API is available
       const isHealthy = await healthApi.check();
       if (!isHealthy) {
         alert("Cannot connect to backend API. Please make sure the server is running at http://localhost:8000\n\nStart it with: uvicorn services.api.main:app --reload --port 8000");
         return;
       }
 
-      setScanning(true);
-      setScanProgress(0);
-
-      const job = await scanApi.scanFaces();
-
-      const interval = setInterval(async () => {
-        try {
-          const status = await scanApi.getStatus(job.job_id);
-          setScanProgress(status.progress);
-          setScanMessage(status.message || "");
-
-          if (status.status === "completed") {
-            clearInterval(interval);
-            setScanning(false);
-            setScanMessage("");
-            await loadStats();
-            window.dispatchEvent(new CustomEvent('refresh-photos'));
-          } else if (status.status === "error") {
-            clearInterval(interval);
-            setScanning(false);
-            setScanMessage("");
-            alert(`Face scanning failed: ${status.message || "Unknown error"}`);
-          }
-        } catch (error) {
-          console.error("Failed to get scan status:", error);
-          clearInterval(interval);
-          setScanning(false);
-          setScanMessage("");
-          alert(`Failed to get scan status: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }, 1000);
+      await scanApi.scanFaces();
     } catch (error) {
       console.error("Failed to start face scanning:", error);
-      setScanning(false);
       alert(`Failed to start face scanning: ${error instanceof Error ? error.message : String(error)}\n\nMake sure the backend API is running at http://localhost:8000`);
     }
+  };
+
+  const isScanning = globalStatus.status === "scanning" || globalStatus.status === "indexing";
+
+  const formatEta = (seconds?: number | null) => {
+    if (!seconds || seconds <= 0) {
+      return null;
+    }
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+    if (minutes <= 0) {
+      return `${remaining}s`;
+    }
+    return `${minutes}m ${remaining}s`;
   };
 
   return (
@@ -238,7 +225,6 @@ const SettingsView: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-5xl">
-        {/* Appearance Section */}
         <section>
           <div className="flex items-center gap-2 mb-4">
             <Sun size={16} className="text-brand-primary" />
@@ -264,10 +250,9 @@ const SettingsView: React.FC = () => {
             </div>
           </Card>
 
-          {/* AI Status Section */}
           <div className="mt-8">
             <div className="flex items-center gap-2 mb-4">
-              <RefreshCw size={16} className={`text-brand-primary ${scanning ? 'animate-spin' : ''}`} />
+              <RefreshCw size={16} className={`text-brand-primary ${isScanning ? 'animate-spin' : ''}`} />
               <h2 className="text-sm font-bold text-light-text-tertiary dark:text-dark-text-tertiary uppercase tracking-widest">
                 AI Status
               </h2>
@@ -275,22 +260,36 @@ const SettingsView: React.FC = () => {
             <Card className="p-6">
               <div className="flex items-center gap-4 mb-4">
                 <div className="relative">
-                  <div className={`w-3 h-3 rounded-full ${scanning ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)]' : 'bg-light-text-tertiary dark:bg-dark-text-tertiary opacity-30'}`} />
-                  {scanning && (
+                  <div className={`w-3 h-3 rounded-full ${isScanning ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)]' : 'bg-light-text-tertiary dark:bg-dark-text-tertiary opacity-30'}`} />
+                  {isScanning && (
                     <div className="absolute inset-0 w-3 h-3 rounded-full bg-emerald-500 animate-ping opacity-40" />
                   )}
                 </div>
                 <div className="flex-1">
                   <h3 className="font-bold text-light-text-primary dark:text-dark-text-primary">
-                    {scanning ? "AI is Processing" : "System Idle"}
+                    {isScanning
+                      ? "AI is Processing"
+                      : globalStatus.status === "error"
+                        ? "Scan failed"
+                        : globalStatus.status === "completed"
+                          ? "Up to date"
+                          : globalStatus.total_photos === 0
+                            ? "Ready"
+                            : "Up to date"}
                   </h3>
                   <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
-                    {scanning ? (scanMessage || "Processing images...") : "Ready for next task"}
+                    {isScanning
+                      ? `${globalStatus.message || "Processing images..."}${formatEta(globalStatus.eta_seconds) ? ` • ETA ${formatEta(globalStatus.eta_seconds)}` : ""}`
+                      : globalStatus.status === "error"
+                        ? (globalStatus.error || globalStatus.message || "Scan failed")
+                        : globalStatus.total_photos === 0
+                          ? "Import photos to get started"
+                          : "All photos processed"}
                   </p>
                 </div>
-                {scanning && (
+                {isScanning && (
                   <div className="text-lg font-black text-brand-primary">
-                    {Math.round(scanProgress * 100)}%
+                    {globalStatus.progress_percent}%
                   </div>
                 )}
               </div>
@@ -315,10 +314,10 @@ const SettingsView: React.FC = () => {
                   </div>
                   <button
                     onClick={handleScanFaces}
-                    disabled={scanning}
+                    disabled={isScanning}
                     className="flex items-center gap-2 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl font-bold text-sm hover:border-brand-primary hover:text-brand-primary disabled:opacity-50 transition-all"
                   >
-                    {scanning ? (
+                    {isScanning ? (
                       <>
                         <Loader2 size={16} className="animate-spin" />
                         <span>Scanning...</span>
@@ -336,7 +335,6 @@ const SettingsView: React.FC = () => {
           </div>
         </section>
 
-        {/* Database Section */}
         <section>
           <div className="flex items-center gap-2 mb-4">
             <Database size={16} className="text-brand-primary" />
@@ -355,13 +353,13 @@ const SettingsView: React.FC = () => {
                 </div>
                 <button
                   onClick={handleSelectFolder}
-                  disabled={scanning}
+                  disabled={isScanning}
                   className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white dark:text-black rounded-xl font-bold text-sm hover:bg-brand-secondary disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/20"
                 >
-                  {scanning ? (
+                  {isScanning ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
-                      <span>{Math.round(scanProgress * 100)}%</span>
+                      <span>{globalStatus.progress_percent}%</span>
                     </>
                   ) : (
                     <>
@@ -414,7 +412,6 @@ const SettingsView: React.FC = () => {
           </Card>
         </section>
 
-        {/* System Info Section */}
         <section>
           <div className="flex items-center gap-2 mb-4">
             <Cpu size={16} className="text-brand-primary" />
@@ -440,7 +437,6 @@ const SettingsView: React.FC = () => {
           </Card>
         </section>
 
-        {/* Tip Section */}
         <section>
           <div className="flex items-center gap-2 mb-4">
             <BarChart3 size={16} className="text-brand-primary" />
@@ -460,7 +456,6 @@ const SettingsView: React.FC = () => {
         </section>
       </div>
 
-      {/* Help Section - Full Width */}
       <div className="mt-12 max-w-5xl">
         <div className="flex items-center gap-2 mb-4">
           <HelpCircle size={16} className="text-brand-primary" />

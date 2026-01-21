@@ -1,14 +1,8 @@
-/** Utility functions for Tauri detection and safe API usage */
-
-/**
- * Check if running in Tauri context
- */
 export function isTauri(): boolean {
   if (typeof window === 'undefined') {
     return false;
   }
   
-  // Check for Tauri-specific globals
   return (
     '__TAURI_INTERNALS__' in window ||
     '__TAURI_IPC__' in window ||
@@ -16,9 +10,6 @@ export function isTauri(): boolean {
   );
 }
 
-/**
- * Safely import Tauri dialog API
- */
 export async function getTauriDialog() {
   if (!isTauri()) {
     return null;
@@ -32,9 +23,6 @@ export async function getTauriDialog() {
   }
 }
 
-/**
- * Open folder dialog with fallback for browser mode
- */
 export async function openFolderDialog(): Promise<string | null> {
   if (isTauri()) {
     try {
@@ -62,7 +50,6 @@ export async function openFolderDialog(): Promise<string | null> {
     }
   }
   
-  // Fallback for browser mode
   const folderPath = prompt(
     "Running in browser mode. Please enter the full path to the photo folder:\n\n" +
     "Example:\n" +
