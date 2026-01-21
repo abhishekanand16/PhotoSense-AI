@@ -91,6 +91,15 @@ torch_home/
 # Tauri sidecar binaries (generated, not committed)
 apps/desktop/src-tauri/binaries/
 
+# Packaging build artifacts
+packaging/dist/
+packaging/backend/.build-venv/
+packaging/backend/build/
+packaging/backend/dist/
+packaging/frontend/.build/
+packaging/*.dmg
+packaging/*.exe
+
 # FAISS index files
 *.index
 *_ids.pkl
