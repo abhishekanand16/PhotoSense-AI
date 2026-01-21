@@ -11,11 +11,9 @@ edition = "2021"
 tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = [
+tauri = { version = "1.5", features = [ "process-all",
     "shell-sidecar",
     "shell-open",
-    "process-relaunch",
-    "process-exit",
     "process-command-api",
     "protocol-asset",
     "fs-all",
