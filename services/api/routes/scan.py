@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
+import os
 import threading
 import uuid
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Iterator, Set
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
@@ -24,6 +25,8 @@ _global_scan_state: Dict = {
     "status": "idle",  # idle | scanning | indexing | done | paused
     "total_photos": 0,
     "scanned_photos": 0,
+    # Override for UI progress bar (supports two-phase progress math)
+    "progress_percent": 0,
     "message": "Ready",
     "current_job_id": None,
     "error": None,
@@ -50,6 +53,7 @@ def _reset_global_state() -> None:
             "status": "idle",
             "total_photos": 0,
             "scanned_photos": 0,
+            "progress_percent": 0,
             "message": "Ready",
             "current_job_id": None,
             "error": None,
@@ -75,6 +79,23 @@ def _create_job(job_id: str, initial_state: Dict) -> None:
         _jobs[job_id] = initial_state.copy()
 
 
+def _iter_image_paths(folder: Path, recursive: bool, image_extensions: Set[str]) -> Iterator[str]:
+    """
+    Stream image file paths without building huge lists in memory.
+    Designed for very large libraries (e.g., 300k files).
+    """
+    if recursive:
+        for root, _, files in os.walk(folder):
+            for name in files:
+                ext = os.path.splitext(name)[1].lower()
+                if ext in image_extensions:
+                    yield str(Path(root) / name)
+    else:
+        for entry in folder.iterdir():
+            if entry.is_file() and entry.suffix.lower() in image_extensions:
+                yield str(entry)
+
+
 async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
     """Background task to process a folder using two-phase approach.
     
@@ -86,6 +107,7 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         status="scanning",
         total_photos=0,
         scanned_photos=0,
+        progress_percent=0,
         message="Scanning folder...",
         current_job_id=job_id,
         error=None,
@@ -156,13 +178,14 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             # PIC
             ".pic",
         }
-        image_paths = []
-        if recursive:
-            image_paths = [str(p) for p in folder.rglob("*") if p.suffix.lower() in image_extensions]
-        else:
-            image_paths = [str(p) for p in folder.iterdir() if p.suffix.lower() in image_extensions]
 
-        total = len(image_paths)
+        # Pass A: count images (streaming, no list allocation)
+        total = 0
+        for _ in _iter_image_paths(folder, recursive, image_extensions):
+            total += 1
+            if total % 5000 == 0:
+                await asyncio.sleep(0)
+
         _update_job(job_id, message=f"Found {total} images")
         _update_global_state(total_photos=total, message=f"Found {total} images")
 
@@ -177,15 +200,13 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         # Progress: 0% - 50%
         # ============================================
         _update_job(job_id, phase="import")
-        imported_photos = []  # List of (photo_id, photo_path) tuples
+        imported_count = 0
         
-        for idx, image_path in enumerate(image_paths):
+        for idx, image_path in enumerate(_iter_image_paths(folder, recursive, image_extensions)):
             try:
                 result = await pipeline.import_photo(image_path)
                 if result.get("status") in ["imported", "exists"]:
-                    photo_id = result.get("photo_id")
-                    if photo_id:
-                        imported_photos.append((photo_id, image_path))
+                    imported_count += 1
             except Exception as e:
                 logging.error(f"Failed to import {image_path}: {str(e)}")
 
@@ -193,15 +214,19 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             progress = (idx + 1) / total * 0.5 if total > 0 else 0.5
             msg = f"Importing photos... {idx + 1}/{total}"
             _update_job(job_id, progress=progress, message=msg)
-            _update_global_state(scanned_photos=idx + 1, message=msg)
+            _update_global_state(
+                scanned_photos=idx + 1,
+                message=msg,
+                progress_percent=int(progress * 100),
+            )
             
             # Yield to event loop to allow status endpoint to respond
             await asyncio.sleep(0)
 
         # Mark Phase 1 complete - photos are now visible in dashboard
-        msg = f"Import complete: {len(imported_photos)} photos ready. Starting AI analysis..."
+        msg = f"Import complete: {imported_count} photos ready. Starting AI analysis..."
         _update_job(job_id, message=msg, phase="scanning")
-        _update_global_state(status="indexing", message=msg)
+        _update_global_state(status="indexing", message=msg, progress_percent=50)
 
         # ============================================
         # PHASE 2: AI Processing (face/object detection)
@@ -211,38 +236,89 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         processed = 0
         total_faces = 0
         total_objects = 0
-        total_to_process = len(imported_photos)
+
+        # Determine how many photos need ML processing.
+        # For recursive scans we can do this quickly with a prefix query.
+        if recursive:
+            total_to_process = pipeline.store.count_unprocessed_photos_in_dir(str(folder))
+        else:
+            total_to_process = 0
+            for path in _iter_image_paths(folder, recursive, image_extensions):
+                p = pipeline.store.get_photo_by_path(path)
+                if not p:
+                    continue
+                if int(p.get("ml_processed", 0) or 0) == 0:
+                    total_to_process += 1
+                if total_to_process % 5000 == 0:
+                    await asyncio.sleep(0)
+
+        # If everything is already processed, finish quickly.
+        if total_to_process == 0:
+            final_msg = f"Up to date: {imported_count} photos imported, no new photos needed processing"
+            _update_job(job_id, status="completed", progress=1.0, phase="complete", message=final_msg)
+            _update_global_state(status="done", scanned_photos=0, total_photos=0, message=final_msg, progress_percent=100)
+            return
         
         # Batch size for optimal CPU throughput
         BATCH_SIZE = 8
-        
-        for batch_start in range(0, total_to_process, BATCH_SIZE):
-            batch_end = min(batch_start + BATCH_SIZE, total_to_process)
-            batch = imported_photos[batch_start:batch_end]
-            
-            for photo_id, image_path in batch:
-                try:
-                    result = await pipeline.process_photo_ml(photo_id, image_path)
-                    processed += 1
-                    faces_found = len(result.get("faces", []))
-                    objects_found = len(result.get("objects", []))
-                    total_faces += faces_found
-                    total_objects += objects_found
-                    logging.info(f"Processed {image_path}: {faces_found} faces, {objects_found} objects")
-                except Exception as e:
-                    logging.error(f"Failed to process ML for {image_path}: {str(e)}", exc_info=True)
 
-            # Save all dirty FAISS indices after each batch
+        batch: list[tuple[int, str]] = []
+        for image_path in _iter_image_paths(folder, recursive, image_extensions):
+            # Look up the photo in DB and skip already-processed photos
+            p = pipeline.store.get_photo_by_path(image_path)
+            if not p:
+                continue
+            if int(p.get("ml_processed", 0) or 0) == 1:
+                continue
+
+            batch.append((int(p["id"]), image_path))
+            if len(batch) < BATCH_SIZE:
+                continue
+
+            for photo_id, path in batch:
+                try:
+                    result = await pipeline.process_photo_ml(photo_id, path)
+                    processed += 1
+                    total_faces += len(result.get("faces", []))
+                    total_objects += len(result.get("objects", []))
+                except Exception as e:
+                    logging.error(f"Failed to process ML for {path}: {str(e)}", exc_info=True)
+
             pipeline.index.save_all_dirty()
-            
-            # Progress for Phase 2: 50% to 100%
-            progress = 0.5 + (idx + 1) / total_to_process * 0.5 if total_to_process > 0 else 1.0
-            msg = f"Analyzing photos... {idx + 1}/{total_to_process}"
+            batch = []
+
+            progress = 0.5 + (processed / total_to_process) * 0.5 if total_to_process > 0 else 1.0
+            msg = f"Analyzing photos... {processed}/{total_to_process}"
             _update_job(job_id, progress=progress, message=msg)
-            _update_global_state(scanned_photos=idx + 1, total_photos=total_to_process, message=msg)
-            
-            # Yield to event loop to allow status endpoint to respond
+            _update_global_state(
+                scanned_photos=processed,
+                total_photos=total_to_process,
+                message=msg,
+                progress_percent=int(progress * 100),
+            )
             await asyncio.sleep(0)
+
+        # Process remaining batch
+        if batch:
+            for photo_id, path in batch:
+                try:
+                    result = await pipeline.process_photo_ml(photo_id, path)
+                    processed += 1
+                    total_faces += len(result.get("faces", []))
+                    total_objects += len(result.get("objects", []))
+                except Exception as e:
+                    logging.error(f"Failed to process ML for {path}: {str(e)}", exc_info=True)
+            pipeline.index.save_all_dirty()
+
+            progress = 0.5 + (processed / total_to_process) * 0.5 if total_to_process > 0 else 1.0
+            msg = f"Analyzing photos... {processed}/{total_to_process}"
+            _update_job(job_id, progress=progress, message=msg)
+            _update_global_state(
+                scanned_photos=processed,
+                total_photos=total_to_process,
+                message=msg,
+                progress_percent=int(progress * 100),
+            )
 
         # Run clustering (always cluster after bulk import)
         _update_job(job_id, message="Organizing faces...")
@@ -252,7 +328,7 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         # Build summary message
         clusters = cluster_result.get("clusters", 0)
         faces_clustered = cluster_result.get("faces_clustered", 0)
-        final_msg = f"Completed: {len(imported_photos)} photos, {total_faces} faces, {clusters} people found"
+        final_msg = f"Completed: {processed} photos analyzed, {total_faces} faces, {clusters} people found"
         _update_job(
             job_id,
             status="completed",
@@ -264,6 +340,7 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             status="done",
             scanned_photos=total_to_process,
             message=final_msg,
+            progress_percent=100,
         )
         logging.info(f"Scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 
@@ -337,7 +414,10 @@ async def get_global_scan_status():
     # Active scan - return current progress
     total = state.get("total_photos", 0)
     scanned = state.get("scanned_photos", 0)
-    progress_percent = int((scanned / total * 100) if total > 0 else 0)
+    # Prefer explicit progress percent from worker (supports multi-phase math)
+    progress_percent = int(state.get("progress_percent") or 0)
+    if progress_percent <= 0:
+        progress_percent = int((scanned / total * 100) if total > 0 else 0)
     
     # If paused (error state), keep progress but show paused status
     if state["status"] == "paused":
@@ -395,9 +475,10 @@ async def scan_faces_async(job_id: str):
     store = SQLiteStore()
 
     try:
-        # Get all photos from database
-        photos = store.get_all_photos()
-        total = len(photos)
+        # Stream photos from database (handles very large libraries)
+        photos_iter = store.iter_photos(batch_size=2000)
+        # We still need a total for progress; fall back to statistics
+        total = store.get_statistics().get("total_photos", 0)
         
         if total == 0:
             _update_job(job_id, status="completed", progress=1.0, message="No photos found to scan")
@@ -405,63 +486,61 @@ async def scan_faces_async(job_id: str):
             return
 
         _update_job(job_id, message=f"Found {total} photos to scan")
-        _update_global_state(total_photos=total, message=f"Found {total} photos to scan")
+        _update_global_state(total_photos=total, message=f"Found {total} photos to scan", progress_percent=0)
         
         processed = 0
         total_faces = 0
         total_objects = 0
-        for idx, photo in enumerate(photos):
-            try:
-                photo_id = photo["id"]
-                photo_path = photo["file_path"]
-                
-                # Check if file exists
-                if not Path(photo_path).exists():
-                    logging.warning(f"Photo file not found: {photo_path}")
-                    continue
-                
-                # Run face/object detection
-                result = await pipeline.process_photo_ml(photo_id, photo_path)
-                processed += 1
-                faces_found = len(result.get("faces", []))
-                objects_found = len(result.get("objects", []))
-                total_faces += faces_found
-                total_objects += objects_found
-                logging.info(f"Processed {photo_path}: {faces_found} faces, {objects_found} objects")
-            except Exception as e:
-                logging.error(f"Failed to scan faces for photo {photo.get('id')}: {str(e)}", exc_info=True)
+        BATCH_SIZE = 8
+        batch = []
+        for photo in photos_iter:
+            batch.append(photo)
+            if len(batch) < BATCH_SIZE:
+                continue
 
-            progress = (idx + 1) / total if total > 0 else 1.0
-            msg = f"Scanning faces... {idx + 1}/{total}"
-            _update_job(job_id, progress=progress, message=msg)
-            _update_global_state(scanned_photos=idx + 1, message=msg)
-            
-            for photo in batch:
+            for p in batch:
                 try:
-                    photo_id = photo["id"]
-                    photo_path = photo["file_path"]
-                    
-                    # Check if file exists
+                    photo_id = p["id"]
+                    photo_path = p["file_path"]
                     if not Path(photo_path).exists():
                         logging.warning(f"Photo file not found: {photo_path}")
                         continue
-                    
-                    # Run face/object detection
+
                     result = await pipeline.process_photo_ml(photo_id, photo_path)
                     processed += 1
-                    faces_found = len(result.get("faces", []))
-                    objects_found = len(result.get("objects", []))
-                    total_faces += faces_found
-                    total_objects += objects_found
-                    logging.info(f"Processed {photo_path}: {faces_found} faces, {objects_found} objects")
+                    total_faces += len(result.get("faces", []))
+                    total_objects += len(result.get("objects", []))
                 except Exception as e:
-                    logging.error(f"Failed to scan faces for photo {photo.get('id')}: {str(e)}", exc_info=True)
+                    logging.error(f"Failed to scan faces for photo {p.get('id')}: {str(e)}", exc_info=True)
 
-            # Save all dirty FAISS indices after each batch
             pipeline.index.save_all_dirty()
-            
-            progress = batch_end / total if total > 0 else 1.0
-            _update_job(job_id, progress=progress, message=f"Scanning faces... {batch_end}/{total}")
+            batch = []
+
+            progress = (processed / total) if total > 0 else 1.0
+            msg = f"Scanning faces... {processed}/{total}"
+            _update_job(job_id, progress=progress, message=msg)
+            _update_global_state(scanned_photos=processed, message=msg, progress_percent=int(progress * 100))
+            await asyncio.sleep(0)
+
+        # Process remaining items
+        if batch:
+            for p in batch:
+                try:
+                    photo_id = p["id"]
+                    photo_path = p["file_path"]
+                    if not Path(photo_path).exists():
+                        logging.warning(f"Photo file not found: {photo_path}")
+                        continue
+                    result = await pipeline.process_photo_ml(photo_id, photo_path)
+                    processed += 1
+                    total_faces += len(result.get("faces", []))
+                    total_objects += len(result.get("objects", []))
+                except Exception as e:
+                    logging.error(f"Failed to scan faces for photo {p.get('id')}: {str(e)}", exc_info=True)
+            pipeline.index.save_all_dirty()
+            progress = (processed / total) if total > 0 else 1.0
+            _update_job(job_id, progress=progress, message=f"Scanning faces... {processed}/{total}")
+            _update_global_state(scanned_photos=processed, message=f"Scanning faces... {processed}/{total}", progress_percent=int(progress * 100))
 
         # Run clustering
         _update_job(job_id, message="Organizing faces...")
@@ -481,6 +560,7 @@ async def scan_faces_async(job_id: str):
             status="done",
             scanned_photos=total,
             message=final_msg,
+            progress_percent=100,
         )
         logging.info(f"Face scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 

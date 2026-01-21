@@ -5,12 +5,14 @@ from typing import Dict, List, Tuple, Optional
 
 import cv2
 import numpy as np
-import insightface
-from insightface.app import FaceAnalysis
 
-# Apply fast face alignment patch BEFORE any InsightFace usage
+# Apply fast face alignment patch BEFORE any InsightFace usage/imports.
+# This prevents InsightFace from binding to deprecated scikit-image APIs.
 from services.ml.utils.face_align_patch import apply_patch
 apply_patch()
+
+import insightface
+from insightface.app import FaceAnalysis
 
 
 class FaceDetector:

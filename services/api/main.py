@@ -1,10 +1,29 @@
 """FastAPI application entry point."""
 
+import os
 from PIL import Image
 
 # Configure PIL to support large images (up to 250MP)
 # Default limit is ~89MP, which triggers DecompressionBombWarning
 Image.MAX_IMAGE_PIXELS = 250_000_000  # 250 megapixels
+
+def _set_default_env(key: str, value: str) -> None:
+    """Set an env var only if the user hasn't set it."""
+    if os.environ.get(key) is None:
+        os.environ[key] = value
+
+# ---------------------------------------------------------------------------
+# CPU / threading defaults (lower CPU spikes & keep UI responsive)
+# ---------------------------------------------------------------------------
+# NOTE: These are safe defaults; users can override by setting env vars.
+_cpu_count = os.cpu_count() or 4
+_default_threads = max(1, min(4, _cpu_count // 2))
+
+for _k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    _set_default_env(_k, str(_default_threads))
+
+# HuggingFace tokenizers sometimes parallelize aggressively
+_set_default_env("TOKENIZERS_PARALLELISM", "false")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
