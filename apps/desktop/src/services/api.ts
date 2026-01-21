@@ -1,5 +1,3 @@
-/** API service for communicating with FastAPI backend. */
-
 import axios from "axios";
 
 const API_BASE_URL = "http://localhost:8000";
@@ -12,7 +10,6 @@ const api = axios.create({
   timeout: 30000, // 30 second timeout
 });
 
-// Add response interceptor for better error handling
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -20,7 +17,6 @@ api.interceptors.response.use(
       throw new Error('Cannot connect to backend API. Make sure the server is running at http://localhost:8000');
     }
     if (error.response) {
-      // Server responded with error status
       throw new Error(error.response.data?.detail || error.response.data?.message || `Server error: ${error.response.status}`);
     }
     throw error;
@@ -72,12 +68,15 @@ export interface JobStatus {
 }
 
 export interface GlobalScanStatus {
-  status: "idle" | "scanning" | "indexing" | "done" | "paused";
+  status: "idle" | "scanning" | "indexing" | "completed" | "error";
   total_photos: number;
-  scanned_photos: number;
+  processed_photos: number;
   progress_percent: number;
   message: string;
   current_job_id?: string;
+  started_at?: string | null;
+  eta_seconds?: number | null;
+  error?: string | null;
 }
 
 export interface Place {
@@ -202,7 +201,6 @@ export const peopleApi = {
   merge: async (sourceId: number, targetId: number): Promise<void> => {
     await api.post("/people/merge", { source_person_id: sourceId, target_person_id: targetId });
   },
-  /** Merge multiple people into a single target person */
   mergeMultiple: async (personIds: number[], targetPersonId: number, minConfidence: number = 0.5): Promise<{
     status: string;
     message: string;
@@ -217,12 +215,10 @@ export const peopleApi = {
     });
     return response.data;
   },
-  /** Delete a person (unassigns faces but keeps them) */
   delete: async (personId: number): Promise<{ status: string; message: string }> => {
     const response = await api.delete<{ status: string; message: string }>(`/people/${personId}`);
     return response.data;
   },
-  /** Delete a person AND all their faces completely */
   deleteWithFaces: async (personId: number): Promise<{
     status: string;
     message: string;
@@ -246,9 +242,9 @@ export const scanApi = {
     const response = await api.get<JobStatus>(`/scan/status/${jobId}`);
     return response.data;
   },
-  /** Get global scan status for progress tracking */
   getGlobalStatus: async (): Promise<GlobalScanStatus> => {
-    const response = await api.get<GlobalScanStatus>("/scan/status");
+    // Use shorter timeout for status polling to avoid blocking UI
+    const response = await api.get<GlobalScanStatus>("/scan/status", { timeout: 5000 });
     return response.data;
   },
   scanFaces: async (): Promise<ScanJob> => {
@@ -323,43 +319,36 @@ export const healthApi = {
 };
 
 export const placesApi = {
-  /** Get top places with photo counts */
   getPlaces: async (limit: number = 50): Promise<Place[]> => {
     const response = await api.get<Place[]>("/places", { params: { limit } });
     return response.data;
   },
 
-  /** Get all photo locations for map display */
   getMapLocations: async (): Promise<PhotoLocation[]> => {
     const response = await api.get<PhotoLocation[]>("/places/map");
     return response.data;
   },
 
-  /** Get photos within a bounding box */
   getPhotosByBbox: async (bbox: BoundingBox): Promise<Photo[]> => {
     const response = await api.get<Photo[]>("/places/photos", { params: bbox });
     return response.data;
   },
 
-  /** Get photos by place name */
   getPhotosByPlace: async (placeName: string): Promise<Photo[]> => {
     const response = await api.get<Photo[]>(`/places/by-name/${encodeURIComponent(placeName)}`);
     return response.data;
   },
 
-  /** Get photos without location data */
   getPhotosWithoutLocation: async (): Promise<Photo[]> => {
     const response = await api.get<Photo[]>("/places/unknown");
     return response.data;
   },
 
-  /** Trigger lazy geocoding for a photo */
   geocodePhoto: async (photoId: number): Promise<PhotoLocation> => {
     const response = await api.post<PhotoLocation>(`/places/geocode/${photoId}`);
     return response.data;
   },
 
-  /** Get location statistics */
   getStats: async (): Promise<LocationStats> => {
     const response = await api.get<LocationStats>("/places/stats");
     return response.data;
@@ -367,43 +356,36 @@ export const placesApi = {
 };
 
 export const tagsApi = {
-  /** Get all custom tags with photo counts */
   getAllTags: async (): Promise<TagSummary[]> => {
     const response = await api.get<TagSummary[]>("/tags");
     return response.data;
   },
 
-  /** Get photos by tag */
   getPhotosByTag: async (tag: string): Promise<Photo[]> => {
     const response = await api.get<Photo[]>(`/tags/${encodeURIComponent(tag)}/photos`);
     return response.data;
   },
 
-  /** Get tags for a specific photo */
   getPhotoTags: async (photoId: number): Promise<string[]> => {
     const response = await api.get<string[]>(`/tags/photo/${photoId}`);
     return response.data;
   },
 
-  /** Add a tag to a photo */
   addTag: async (photoId: number, tag: string): Promise<{ status: string; tag: string }> => {
     const response = await api.post(`/tags/photo/${photoId}`, { tag });
     return response.data;
   },
 
-  /** Add multiple tags to a photo */
   addTags: async (photoId: number, tags: string[]): Promise<{ status: string; added_tags: string[] }> => {
     const response = await api.post(`/tags/photo/${photoId}/multiple`, { tags });
     return response.data;
   },
 
-  /** Remove a tag from a photo */
   removeTag: async (photoId: number, tag: string): Promise<{ status: string; message: string }> => {
     const response = await api.delete(`/tags/photo/${photoId}/${encodeURIComponent(tag)}`);
     return response.data;
   },
 
-  /** Remove all tags from a photo */
   removeAllTags: async (photoId: number): Promise<{ status: string; deleted_count: number }> => {
     const response = await api.delete(`/tags/photo/${photoId}`);
     return response.data;

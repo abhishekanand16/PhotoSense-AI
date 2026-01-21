@@ -1,5 +1,3 @@
-"""Pydantic models for API requests/responses."""
-
 from datetime import datetime
 from typing import List, Optional
 
@@ -7,8 +5,6 @@ from pydantic import BaseModel
 
 
 class PhotoResponse(BaseModel):
-    """Photo metadata response."""
-
     id: int
     file_path: str
     date_taken: Optional[str] = None
@@ -20,8 +16,6 @@ class PhotoResponse(BaseModel):
 
 
 class PersonResponse(BaseModel):
-    """Person/cluster response."""
-
     id: int
     cluster_id: Optional[int] = None
     name: Optional[str] = None
@@ -29,8 +23,6 @@ class PersonResponse(BaseModel):
 
 
 class ObjectResponse(BaseModel):
-    """Object detection response."""
-
     id: int
     photo_id: int
     category: str
@@ -42,15 +34,11 @@ class ObjectResponse(BaseModel):
 
 
 class CategorySummaryResponse(BaseModel):
-    """Summary of object categories with photo counts."""
-
     category: str
     photo_count: int
 
 
 class SceneResponse(BaseModel):
-    """Scene detection response."""
-
     id: int
     photo_id: int
     scene_label: str
@@ -58,73 +46,58 @@ class SceneResponse(BaseModel):
 
 
 class SceneSummaryResponse(BaseModel):
-    """Summary of scene labels with photo counts."""
-
     label: str
     photo_count: int
     avg_confidence: float
 
 
 class ScanRequest(BaseModel):
-    """Request to scan a folder."""
-
     folder_path: str
     recursive: bool = True
 
 
 class ScanResponse(BaseModel):
-    """Scan operation response."""
-
     job_id: str
     status: str
     message: str
 
 
 class JobStatusResponse(BaseModel):
-    """Background job status."""
-
     job_id: str
     status: str
     progress: float
     message: Optional[str] = None
-    phase: Optional[str] = None  # "import", "scanning", or "complete"
+    phase: Optional[str] = None
 
 
 class GlobalScanStatusResponse(BaseModel):
-    """Global scan status for progress tracking."""
-
-    status: str  # idle | scanning | indexing | done | paused
+    status: str
     total_photos: int
-    scanned_photos: int
+    processed_photos: int
     progress_percent: int  # 0-100
     message: str
     current_job_id: Optional[str] = None
+    started_at: Optional[str] = None
+    eta_seconds: Optional[int] = None
+    error: Optional[str] = None
 
 
 class UpdatePersonRequest(BaseModel):
-    """Request to update person name."""
-
     name: str
 
 
 class MergePeopleRequest(BaseModel):
-    """Request to merge people."""
-
     source_person_id: int
     target_person_id: int
 
 
 class MergeMultiplePeopleRequest(BaseModel):
-    """Request to merge multiple people into one."""
-
-    person_ids: List[int]  # IDs of people to merge (will be merged into target)
-    target_person_id: int  # The person to merge all others into
-    min_confidence: float = 0.5  # Minimum face confidence to include in merge
+    person_ids: List[int]
+    target_person_id: int
+    min_confidence: float = 0.5
 
 
 class SearchRequest(BaseModel):
-    """Search request."""
-
     query: Optional[str] = None
     person_id: Optional[int] = None
     category: Optional[str] = None
@@ -133,8 +106,6 @@ class SearchRequest(BaseModel):
 
 
 class StatisticsResponse(BaseModel):
-    """Database statistics."""
-
     total_photos: int
     total_faces: int
     total_objects: int
@@ -143,13 +114,7 @@ class StatisticsResponse(BaseModel):
     total_locations: int = 0
 
 
-# =========================================================================
-# PET MODELS (parallel to people models)
-# =========================================================================
-
 class PetResponse(BaseModel):
-    """Pet identity response."""
-
     id: int
     cluster_id: Optional[int] = None
     name: Optional[str] = None
@@ -158,8 +123,6 @@ class PetResponse(BaseModel):
 
 
 class PetDetectionResponse(BaseModel):
-    """Pet detection response."""
-
     id: int
     photo_id: int
     species: str
@@ -172,21 +135,15 @@ class PetDetectionResponse(BaseModel):
 
 
 class UpdatePetRequest(BaseModel):
-    """Request to update pet name."""
-
     name: str
 
 
 class MergePetsRequest(BaseModel):
-    """Request to merge pets."""
-
     source_pet_id: int
     target_pet_id: int
 
 
 class SimilarPetResponse(BaseModel):
-    """Similar pet search result."""
-
     pet_detection_id: int
     photo_id: int
     similarity: float
@@ -195,13 +152,7 @@ class SimilarPetResponse(BaseModel):
     pet_id: Optional[int] = None
 
 
-# =========================================================================
-# LOCATION/PLACES MODELS
-# =========================================================================
-
 class LocationResponse(BaseModel):
-    """Photo location response."""
-
     photo_id: int
     latitude: float
     longitude: float
@@ -211,8 +162,6 @@ class LocationResponse(BaseModel):
 
 
 class PlaceResponse(BaseModel):
-    """Place with photo count response."""
-
     name: str
     count: int
     lat: float

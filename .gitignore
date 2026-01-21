@@ -85,6 +85,15 @@ logs/
 *.pkl
 models/
 .cache/
+huggingface/
+torch_home/
+
+# Tauri sidecar binaries (generated, not committed)
+apps/desktop/src-tauri/binaries/
+
+# FAISS index files
+*.index
+*_ids.pkl
 
 # Streamlit
 .streamlit/

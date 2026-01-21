@@ -1,12 +1,9 @@
-"""Cleanup utility to merge duplicate people based on cluster_id."""
-
 import logging
 from collections import defaultdict
 from typing import Dict, List
 
 from services.ml.storage.sqlite_store import SQLiteStore
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

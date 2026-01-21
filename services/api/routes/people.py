@@ -100,12 +100,15 @@ async def get_photos_for_person(person_id: int):
 
 @router.post("/merge")
 async def merge_people(request: MergePeopleRequest):
-    """Merge two people."""
     store = SQLiteStore()
     try:
         if request.source_person_id == request.target_person_id:
             raise HTTPException(status_code=400, detail="Cannot merge person with itself")
+        source_faces = store.get_faces_for_person(request.source_person_id)
+        source_face_ids = [face["id"] for face in source_faces]
         store.merge_people(request.source_person_id, request.target_person_id)
+        if source_face_ids:
+            store.set_faces_person_locked(source_face_ids, True)
         return {"status": "success", "message": "People merged successfully"}
     except HTTPException:
         raise
@@ -173,6 +176,7 @@ async def merge_multiple_people(request: MergeMultiplePeopleRequest):
             if high_conf_face_ids:
                 store.update_faces_person(high_conf_face_ids, request.target_person_id)
                 total_faces_merged += len(high_conf_face_ids)
+            store.set_faces_person_locked(high_conf_face_ids, True)
             
             # Delete the source person record
             store.delete_person(person_id)
@@ -203,16 +207,15 @@ async def merge_multiple_people(request: MergeMultiplePeopleRequest):
 
 @router.delete("/{person_id}")
 async def delete_person(person_id: int):
-    """
-    Delete a person and unassign all their faces.
-    Faces remain in the database but are unassigned (person_id = NULL).
-    People can be deleted regardless of whether they have a name assigned.
-    """
     store = SQLiteStore()
     try:
+        faces = store.get_faces_for_person(person_id)
+        face_ids = [face["id"] for face in faces]
         deleted = store.delete_person(person_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Person not found")
+        if face_ids:
+            store.set_faces_suppressed(face_ids, True)
         return {"status": "success", "message": "Person deleted successfully"}
     except HTTPException:
         raise

@@ -1,28 +1,3 @@
-"""
-Main ML pipeline orchestrator for PhotoSense-AI.
-
-Production-grade face recognition pipeline with:
-- InsightFace (RetinaFace + ArcFace) for detection and embedding
-- DBSCAN clustering for identity grouping
-- FAISS for similarity search
-- SQLite for metadata and embedding storage
-
-Design decisions:
-1. Confidence threshold: 0.6 (balances recall vs precision)
-2. Clustering: DBSCAN with eps=0.5, min_samples=2 (allows pairs)
-3. Single-face clusters: Kept (better to split than merge incorrectly)
-4. Low-confidence faces: Excluded from clustering (manual review)
-5. Noise faces: Unassigned, available for user correction
-6. Face alignment: Handled automatically by InsightFace
-7. Embeddings: Stored in SQLite (retrieval) + FAISS (similarity)
-8. Reclustering: Can be triggered manually or automatically after N new faces
-
-Consistency guarantees:
-- Embeddings stored in both SQLite and FAISS (rebuild_faiss_index if diverge)
-- Face deletion removes from DB but requires FAISS rebuild
-- Clustering is idempotent (can rerun safely)
-"""
-
 import asyncio
 import os
 from pathlib import Path
@@ -43,96 +18,29 @@ from services.ml.storage.faiss_index import FAISSIndex
 from services.ml.storage.sqlite_store import SQLiteStore
 from services.ml.utils.path_utils import validate_photo_path
 from services.ml.utils import extract_exif_metadata
-
-
-# Scene fusion configuration
-SCENE_FUSION_CONFIG = {
-    # Maximum number of final scene tags per image
-    "max_tags": 10,
-    # Minimum confidence for Places365 tags
-    "places365_min_confidence": 0.30,
-    # Minimum confidence for CLIP tags
-    "clip_min_confidence": 0.40,
-    # Minimum confidence for Florence-2 tags
-    "florence_min_confidence": 0.70,
-    # YOLO object categories that imply scene tags
-    "yolo_scene_implications": {
-        "animal:dog": ["outdoor"],
-        "animal:cat": ["indoor"],
-        "animal:bird": ["outdoor", "nature"],
-        "animal:horse": ["outdoor", "nature"],
-        "vehicle:car": ["outdoor", "street"],
-        "vehicle:boat": ["water", "outdoor"],
-        "sports:surfboard": ["beach", "water"],
-        "sports:skis": ["snow", "mountain"],
-        "plant:potted plant": ["indoor", "garden"],
-    },
-    # Generic tags to filter out during tagging
-    "generic_tags_filter": {
-        "outdoor", "indoor", "photo", "image", "picture", "scene",
-        "view", "background", "foreground", "object", "item", "thing",
-        "stuff", "area", "place", "location"
-    },
-}
-
-
-# Clustering configuration (industry-aligned defaults)
-# These values are based on Google Photos / Apple Photos behavior
-CLUSTERING_CONFIG = {
-    # Minimum confidence to include face in clustering
-    # 0.6 = reasonable threshold to avoid false positives
-    "min_confidence": 0.6,
-    
-    # DBSCAN epsilon (distance threshold)
-    # 0.5 = ~50% similarity required for same cluster
-    # Lower = stricter (fewer false positives, more splits)
-    # Higher = looser (more false positives, fewer splits)
-    "eps": 0.5,
-    
-    # Minimum samples to form a cluster
-    # 2 = allow pairs (reasonable for face clustering)
-    # 1 = every face becomes a cluster (too aggressive)
-    # 3+ = require more evidence (may miss valid identities)
-    "min_samples": 2,
-    
-    # How to handle single-face clusters:
-    # - Keep them as separate people (user can merge later)
-    # - Rationale: Better to split than merge incorrectly
-    "keep_single_face_clusters": True,
-    
-    # How to handle low-confidence faces:
-    # - Exclude from clustering (don't create bad clusters)
-    # - They remain unassigned for manual review
-    "exclude_low_confidence_from_clustering": True,
-    
-    # Automatic reclustering triggers:
-    # - Recluster when N new faces added (incremental clustering)
-    # - Set to None to disable automatic reclustering
-    "auto_recluster_threshold": 50,
-}
+from services.config import (
+    CACHE_DIR,
+    CLUSTERING_CONFIG,
+    DB_PATH,
+    INDICES_DIR,
+    PET_CLUSTERING_CONFIG,
+    SCENE_FUSION_CONFIG,
+)
 
 
 class MLPipeline:
-    """Orchestrates ML processing: detection, embedding, clustering."""
 
     def __init__(
         self,
-        db_path: str = "photosense.db",
-        index_dir: str = "data/indices",
-        cache_dir: str = "data/cache",
+        db_path: str = str(DB_PATH),
+        index_dir: str = str(INDICES_DIR),
+        cache_dir: str = str(CACHE_DIR),
     ):
-        """Initialize ML pipeline with lazy model loading for fast startup."""
         self.store = SQLiteStore(db_path)
         self.index = FAISSIndex(index_dir)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # ===================================================================
-        # LAZY MODEL LOADING for fast startup
-        # Face detector loads immediately (needed for basic processing)
-        # Heavy models (CLIP, Florence, Places365) are deferred
-        # ===================================================================
-        
         # Essential models - load immediately (lightweight)
         self._face_detector = FaceDetector()
         self._object_detector = ObjectDetector()
@@ -188,11 +96,22 @@ class MLPipeline:
         return self._image_embedder
 
     def _init_indices(self) -> None:
-        """Initialize FAISS indices."""
+        """Initialize FAISS indices with auto-rebuild support."""
+        import logging
+        
+        # Register rebuild callbacks for auto-recovery from corruption
+        self.index.register_rebuild_callback("face", self._get_face_embeddings_for_rebuild)
+        self.index.register_rebuild_callback("pet", self._get_pet_embeddings_for_rebuild)
+        # Note: image index rebuild requires re-processing photos, not stored in DB
+        
         # Face embeddings: 512 dim, cosine similarity
         if not self.index.load_index("face"):
-            self.index.create_index("face", dimension=512, metric="cosine")
-            self.index.save_index("face")
+            # Check if this is a corruption case
+            rebuild_result = self.index.auto_rebuild_if_corrupted("face")
+            if rebuild_result["action"] == "failed" or rebuild_result["action"] == "none":
+                self.index.create_index("face", dimension=512, metric="cosine")
+                self.index.save_index("face")
+            logging.info(f"Face index init: {rebuild_result}")
 
         # Image embeddings: 768 dim (CLIP-Large), cosine similarity
         if not self.index.load_index("image"):
@@ -202,8 +121,19 @@ class MLPipeline:
         # Pet embeddings: 768 dim (CLIP-Large), cosine similarity
         # Separate index for pet identity clustering and similarity search
         if not self.index.load_index("pet"):
-            self.index.create_index("pet", dimension=768, metric="cosine")
-            self.index.save_index("pet")
+            rebuild_result = self.index.auto_rebuild_if_corrupted("pet")
+            if rebuild_result["action"] == "failed" or rebuild_result["action"] == "none":
+                self.index.create_index("pet", dimension=768, metric="cosine")
+                self.index.save_index("pet")
+            logging.info(f"Pet index init: {rebuild_result}")
+    
+    def _get_face_embeddings_for_rebuild(self) -> List[Tuple[int, np.ndarray]]:
+        """Get all face embeddings from database for FAISS rebuild."""
+        return self.store.get_all_embeddings_with_faces()
+    
+    def _get_pet_embeddings_for_rebuild(self) -> List[Tuple[int, np.ndarray]]:
+        """Get all pet embeddings from database for FAISS rebuild."""
+        return self.store.get_all_pet_embeddings_with_detections()
 
     async def import_photo(self, photo_path: str) -> Dict:
         """Import a photo with metadata only (no face/object detection).
@@ -717,7 +647,6 @@ class MLPipeline:
                 "total": len(embeddings_data)
             }
 
-        # Filter by confidence (EDGE CASE: exclude low-confidence faces)
         filtered_data = []
         low_confidence_count = 0
         
@@ -725,12 +654,14 @@ class MLPipeline:
             face = self.store.get_face(face_id)
             if not face:
                 continue
-                
+            if face.get("suppressed"):
+                continue
+            if face.get("person_locked") and face.get("person_id") is not None:
+                continue
             if face.get('confidence', 0) >= min_confidence:
                 filtered_data.append((face_id, embedding))
             else:
                 low_confidence_count += 1
-                # Clear assignments for low-confidence faces
                 self.store.update_face_cluster(face_id, None)
                 self.store.update_face_person(face_id, None)
         
@@ -1145,15 +1076,6 @@ class MLPipeline:
     # PET CLUSTERING METHODS (parallel to face clustering)
     # =========================================================================
 
-    # Pet clustering configuration (similar to face clustering)
-    PET_CLUSTERING_CONFIG = {
-        "min_confidence": 0.4,  # Lower threshold for pets
-        "eps": 0.4,  # Tighter clustering for pet identity (CLIP embeddings)
-        "min_samples": 2,  # Allow pairs
-        "keep_single_detection_clusters": False,  # Single-occurrence pets remain Unknown
-        "auto_recluster_threshold": 20,  # Fewer pets than faces typically
-    }
-
     async def cluster_pets(
         self,
         eps: float = None,
@@ -1172,9 +1094,9 @@ class MLPipeline:
         import logging
         
         # Use config defaults if not specified
-        eps = eps or self.PET_CLUSTERING_CONFIG["eps"]
-        min_samples = min_samples or self.PET_CLUSTERING_CONFIG["min_samples"]
-        min_confidence = min_confidence or self.PET_CLUSTERING_CONFIG["min_confidence"]
+        eps = eps or PET_CLUSTERING_CONFIG["eps"]
+        min_samples = min_samples or PET_CLUSTERING_CONFIG["min_samples"]
+        min_confidence = min_confidence or PET_CLUSTERING_CONFIG["min_confidence"]
         
         # Get all pet embeddings from database
         embeddings_data = self.store.get_all_pet_embeddings_with_detections()
@@ -1254,7 +1176,7 @@ class MLPipeline:
                 cluster_detection_count = sum(1 for label in labels if label == cluster_label)
                 
                 # Skip single-detection clusters (remain Unknown)
-                if cluster_detection_count == 1 and not self.PET_CLUSTERING_CONFIG["keep_single_detection_clusters"]:
+                if cluster_detection_count == 1 and not PET_CLUSTERING_CONFIG["keep_single_detection_clusters"]:
                     # Mark as noise
                     for detection_id, label in zip(detection_ids, labels):
                         if label == cluster_label:
@@ -1374,7 +1296,7 @@ class MLPipeline:
         """
         Check if automatic pet reclustering should be triggered.
         """
-        threshold = self.PET_CLUSTERING_CONFIG.get("auto_recluster_threshold")
+        threshold = PET_CLUSTERING_CONFIG.get("auto_recluster_threshold")
         if threshold is None:
             return False
         

@@ -94,12 +94,19 @@ This will start the Tauri development server and open the desktop application.
 
 ### Production Build
 
-```bash
-# Build desktop app
-cd apps/desktop
-npm run tauri build
+Install PyInstaller for backend bundling:
 
-# The built application will be in apps/desktop/src-tauri/target/release/
+```bash
+pip install pyinstaller
+```
+
+```bash
+# Build desktop installers (bundled backend)
+cd packaging/desktop-wrapper
+./build_desktop.sh   # macOS/Linux
+# or: .\build_desktop.ps1 (Windows)
+
+# The built application will be in packaging/desktop-wrapper/src-tauri/target/release/bundle/
 ```
 
 ## Usage
@@ -176,6 +183,8 @@ PhotoSense-AI/
 │       │   ├── services/     # API client and utilities
 │       │   └── styles/       # CSS/Tailwind styles
 │       └── src-tauri/        # Rust backend for Tauri
+├── packaging/
+│   └── desktop-wrapper/      # PyInstaller + Tauri packaging wrapper
 ├── services/
 │   ├── api/                  # FastAPI service
 │   │   ├── routes/           # API route handlers
@@ -185,30 +194,22 @@ PhotoSense-AI/
 │       ├── detectors/        # Face and object detectors
 │       ├── embeddings/       # Face and image embedding models
 │       └── storage/          # SQLite and FAISS storage
-├── data/                     # Data directories (created at runtime)
-│   ├── raw_images/           # Processed image cache
-│   ├── faces/                # Face detection cache
-│   ├── embeddings/           # Embedding cache
-│   ├── indices/              # FAISS index files
-│   └── cache/                # General cache
 ├── requirements.txt          # Python dependencies
 └── README.md                 # This file
 ```
 
 ## Configuration
 
-### Database
+### Data Storage
 
-The application uses SQLite for metadata storage. The database file (`photosense.db`) is created automatically in the project root.
+Runtime data is stored in the OS app data directory:
+- macOS: `~/Library/Application Support/PhotoSense-AI`
+- Windows: `%APPDATA%/PhotoSense-AI`
+- Linux: `~/.local/share/PhotoSense-AI`
 
-### Data Directories
+Override with `PHOTOSENSE_DATA_DIR` if needed.
 
-The following directories are created automatically:
-- `data/raw_images/` - Processed image thumbnails
-- `data/faces/` - Face detection results
-- `data/embeddings/` - Cached embeddings
-- `data/indices/` - FAISS vector indices
-- `data/cache/` - General cache files
+Stored items include `photosense.db`, `indices/`, `cache/`, `logs/`, and `state/`.
 
 ### Model Files
 
@@ -260,7 +261,7 @@ npm test
 - Check system resources (CPU, RAM)
 
 **Database errors:**
-- Ensure write permissions in project directory
+- Ensure write permissions in the app data directory
 - Check disk space
 - Verify SQLite installation
 

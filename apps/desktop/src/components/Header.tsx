@@ -26,20 +26,17 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   
-  // Global scan status state
   const [globalStatus, setGlobalStatus] = useState<GlobalScanStatus>({
     status: "idle",
     total_photos: 0,
-    scanned_photos: 0,
+    processed_photos: 0,
     progress_percent: 100,
     message: "Ready",
   });
-  
-  // Track if we had an active scan recently (to avoid showing "Disconnected" during busy ML processing)
+  const lastStatusRef = useRef<GlobalScanStatus["status"]>("idle");
   const lastKnownActiveStatus = useRef<GlobalScanStatus | null>(null);
   const consecutiveFailures = useRef(0);
 
-  // Poll global scan status every 3 seconds
   useEffect(() => {
     const pollStatus = async () => {
       try {
@@ -48,12 +45,21 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
         setIsBackendConnected(true);
         consecutiveFailures.current = 0;
         
-        // Track last known active scan status
+        // Track last known active scan status for resilience
         if (status.status === "scanning" || status.status === "indexing") {
           lastKnownActiveStatus.current = status;
         } else {
           lastKnownActiveStatus.current = null;
         }
+        
+        if (status.status === "completed" && lastStatusRef.current !== "completed") {
+          window.dispatchEvent(new CustomEvent('refresh-photos'));
+          window.dispatchEvent(new CustomEvent('refresh-people'));
+        }
+        if (status.status === "error" && lastStatusRef.current !== "error") {
+          alert(`Scan failed: ${status.error || status.message || "Unknown error"}`);
+        }
+        lastStatusRef.current = status.status;
       } catch {
         consecutiveFailures.current += 1;
         
@@ -71,11 +77,9 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
       }
     };
 
-    // Check immediately on mount
     pollStatus();
 
-    // Poll every 3 seconds
-    const interval = setInterval(pollStatus, 3000);
+    const interval = setInterval(pollStatus, 1000);
 
     return () => clearInterval(interval);
   }, []);
@@ -90,17 +94,13 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
 
   const handleSelectFolder = async () => {
     try {
-      console.log("Opening folder dialog...");
       const folderPath = await openFolderDialog();
 
       if (folderPath === null) {
-        // User cancelled the dialog
-        console.log("User cancelled folder selection");
         return;
       }
 
       if (folderPath) {
-        console.log("Selected folder:", folderPath);
         await handleScan(folderPath);
       } else {
         console.error("Invalid folder selection");
@@ -115,45 +115,19 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
 
   const handleScan = async (folderPath: string) => {
     try {
-      // Check if API is available
       const isHealthy = await healthApi.check();
       if (!isHealthy) {
         alert("Cannot connect to backend API. Please make sure the server is running at http://localhost:8000\n\nStart it with: uvicorn services.api.main:app --reload --port 8000");
         return;
       }
 
-      // Start the scan - progress will be tracked via global status polling
-      const job = await scanApi.start(folderPath, true);
-
-      // Poll job status for completion/error (in addition to global status)
-      const interval = setInterval(async () => {
-        try {
-          const status = await scanApi.getStatus(job.job_id);
-
-          if (status.status === "completed") {
-            clearInterval(interval);
-            // Refresh the app to show new photos
-            setTimeout(() => {
-              window.dispatchEvent(new CustomEvent('refresh-photos'));
-              window.dispatchEvent(new CustomEvent('refresh-people'));
-            }, 500);
-          } else if (status.status === "error") {
-            clearInterval(interval);
-            alert(`Scan failed: ${status.message || "Unknown error"}`);
-          }
-        } catch (error) {
-          console.error("Failed to get scan status:", error);
-          clearInterval(interval);
-          alert(`Failed to get scan status: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }, 2000);
+      await scanApi.start(folderPath, true);
     } catch (error) {
       console.error("Failed to start scan:", error);
       alert(`Failed to start scan: ${error instanceof Error ? error.message : String(error)}\n\nMake sure the backend API is running at http://localhost:8000`);
     }
   };
   
-  // Helper to check if scanning is in progress
   const isScanning = globalStatus.status === "scanning" || globalStatus.status === "indexing";
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -163,42 +137,46 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
     }
   };
 
+  const formatEta = (seconds?: number | null) => {
+    if (!seconds || seconds <= 0) {
+      return null;
+    }
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+    if (minutes <= 0) {
+      return `${remaining}s`;
+    }
+    return `${minutes}m ${remaining}s`;
+  };
+
   const handleRefresh = async () => {
     if (isRefreshing) return;
     
     setIsRefreshing(true);
     try {
-      // Run all cleanups in parallel for speed
       const cleanupResults = await Promise.allSettled([
-        // Clean up orphaned people (0 faces)
         peopleApi.cleanupOrphans().then(r => ({ type: 'people', count: r.count })),
         
-        // Clean up orphaned objects (deleted photos)
         fetch('http://localhost:8000/objects/cleanup-orphans', { method: 'POST' })
           .then(r => r.json())
           .then(r => ({ type: 'objects', count: r.deleted_objects })),
         
-        // Clean up orphaned locations (deleted photos)
         fetch('http://localhost:8000/places/cleanup-orphans', { method: 'POST' })
           .then(r => r.json())
           .then(r => ({ type: 'locations', count: r.deleted_locations })),
       ]);
       
-      // Log cleanup results
       cleanupResults.forEach((result) => {
         if (result.status === 'fulfilled' && result.value.count > 0) {
-          console.log(`Cleaned up ${result.value.count} orphaned ${result.value.type}`);
         }
       });
       
-      // Dispatch refresh events for all views
       window.dispatchEvent(new CustomEvent('refresh-photos'));
       window.dispatchEvent(new CustomEvent('refresh-people'));
       window.dispatchEvent(new CustomEvent('refresh-objects'));
       window.dispatchEvent(new CustomEvent('refresh-places'));
       window.dispatchEvent(new CustomEvent('refresh-data'));
       
-      // Small delay for visual feedback
       await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
       console.error('Refresh failed:', error);
@@ -211,7 +189,6 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
     <div className="h-20 flex items-center gap-4 px-8 mt-4 sticky top-0 z-10">
       <div className="flex-1 h-full bg-light-surface/80 dark:bg-dark-surface/80 backdrop-blur-xl border border-light-border dark:border-dark-border rounded-2xl shadow-soft flex items-center gap-6 px-6">
 
-        {/* Search */}
         <form onSubmit={handleSearchSubmit} className="flex-1 max-w-xl group">
           <div className="relative flex items-center">
             <Search className="absolute left-3 w-4 h-4 text-light-text-tertiary dark:text-dark-text-tertiary group-focus-within:text-brand-primary transition-colors" />
@@ -226,19 +203,9 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
         </form>
 
         <div className="flex items-center gap-4">
-          {/* Status with Progress Bar */}
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-3 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl min-w-[180px]">
-              {!isBackendConnected ? (
-                // Disconnected state
-                <>
-                  <Circle size={8} className="fill-red-500 text-red-500" />
-                  <span className="text-xs font-bold uppercase tracking-wider text-red-500">
-                    Disconnected
-                  </span>
-                </>
-              ) : globalStatus.status === "scanning" || globalStatus.status === "indexing" ? (
-                // Active scan state
+              {globalStatus.status === "scanning" || globalStatus.status === "indexing" ? (
                 <>
                   <Loader2 size={16} className="text-brand-primary animate-spin flex-shrink-0" />
                   <div className="flex flex-col min-w-0">
@@ -246,28 +213,33 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
                       {globalStatus.progress_percent}%
                     </span>
                     <span className="text-[10px] text-light-text-tertiary dark:text-dark-text-tertiary truncate">
-                      {globalStatus.scanned_photos}/{globalStatus.total_photos} photos
+                      {globalStatus.processed_photos}/{globalStatus.total_photos} photos
+                      {formatEta(globalStatus.eta_seconds) ? ` • ETA ${formatEta(globalStatus.eta_seconds)}` : ""}
                     </span>
                   </div>
                 </>
-              ) : globalStatus.status === "paused" ? (
-                // Paused/Error state
+              ) : globalStatus.status === "error" ? (
                 <>
                   <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
                   <span className="text-xs font-bold text-amber-500">
-                    Scan paused
+                    Scan failed
+                  </span>
+                </>
+              ) : globalStatus.status === "completed" ? (
+                <>
+                  <Circle size={8} className="fill-emerald-500 text-emerald-500" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-light-text-tertiary dark:text-dark-text-tertiary">
+                    Up to date
                   </span>
                 </>
               ) : globalStatus.total_photos === 0 ? (
-                // Empty library
                 <>
                   <Circle size={8} className="fill-light-text-tertiary dark:fill-dark-text-tertiary text-light-text-tertiary dark:text-dark-text-tertiary" />
                   <span className="text-xs font-bold uppercase tracking-wider text-light-text-tertiary dark:text-dark-text-tertiary">
-                    No photos
+                    Ready
                   </span>
                 </>
               ) : (
-                // Idle state with photos
                 <>
                   <Circle size={8} className="fill-emerald-500 text-emerald-500" />
                   <span className="text-xs font-bold uppercase tracking-wider text-light-text-tertiary dark:text-dark-text-tertiary">
@@ -277,8 +249,7 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
               )}
             </div>
             
-            {/* Mini progress bar - only shown during active scan */}
-            {isBackendConnected && (globalStatus.status === "scanning" || globalStatus.status === "indexing") && (
+            {(globalStatus.status === "scanning" || globalStatus.status === "indexing") && (
               <div className="h-1 bg-light-border dark:bg-dark-border rounded-full overflow-hidden mx-1">
                 <div 
                   className="h-full bg-brand-primary transition-all duration-300 ease-out"
@@ -290,7 +261,6 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
 
           <div className="h-8 w-[1px] bg-light-border dark:bg-dark-border" />
 
-          {/* Actions */}
           <div className="flex items-center gap-2">
             <button
               onClick={handleSelectFolder}

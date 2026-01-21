@@ -1,5 +1,3 @@
-"""Statistics endpoints."""
-
 from fastapi import APIRouter
 
 from services.api.models import StatisticsResponse
@@ -10,7 +8,16 @@ router = APIRouter(prefix="/stats", tags=["stats"])
 
 @router.get("", response_model=StatisticsResponse)
 async def get_statistics():
-    """Get database statistics."""
-    store = SQLiteStore()
-    stats = store.get_statistics()
-    return StatisticsResponse(**stats)
+    try:
+        store = SQLiteStore(readonly=True)
+        stats = store.get_statistics()
+        return StatisticsResponse(**stats)
+    except FileNotFoundError:
+        return StatisticsResponse(
+            total_photos=0,
+            total_faces=0,
+            total_objects=0,
+            total_people=0,
+            labeled_faces=0,
+            total_locations=0,
+        )

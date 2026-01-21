@@ -1,55 +1,82 @@
-"""Scanning and processing endpoints."""
-
 import asyncio
+import json
 import logging
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from services.api.models import GlobalScanStatusResponse, JobStatusResponse, ScanRequest, ScanResponse
+from services.config import SCAN_BATCH_SIZE, STATE_DIR
 from services.ml.utils.path_utils import validate_folder_path as _validate_folder_path
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 
-# In-memory job tracking (use Redis in production)
 _jobs: Dict[str, Dict] = {}
 _jobs_lock = threading.Lock()
 
-# Global scan state for progress tracking across all jobs
-# This provides a single source of truth for the UI to poll
 _global_scan_state: Dict = {
-    "status": "idle",  # idle | scanning | indexing | done | paused
+    "status": "idle",
     "total_photos": 0,
-    "scanned_photos": 0,
+    "processed_photos": 0,
+    "started_at": None,
+    "eta_seconds": None,
+    "progress_percent": 0,
     "message": "Ready",
     "current_job_id": None,
     "error": None,
 }
 _global_state_lock = threading.Lock()
 
+_state_dir = STATE_DIR
+_state_file = _state_dir / "scan_state.json"
+
+def _load_scan_state() -> None:
+    if not _state_file.exists():
+        return
+    try:
+        payload = json.loads(_state_file.read_text())
+    except Exception:
+        return
+    with _global_state_lock:
+        for key in _global_scan_state.keys():
+            if key in payload:
+                _global_scan_state[key] = payload[key]
+
+def _persist_scan_state() -> None:
+    try:
+        _state_dir.mkdir(parents=True, exist_ok=True)
+        snapshot = _get_global_state()
+        _state_file.write_text(json.dumps(snapshot))
+    except Exception:
+        return
+
+_load_scan_state()
+
 
 def _update_global_state(**kwargs) -> None:
-    """Thread-safe global scan state update."""
     with _global_state_lock:
         _global_scan_state.update(kwargs)
+    _persist_scan_state()
 
 
 def _get_global_state() -> Dict:
-    """Thread-safe global scan state retrieval."""
     with _global_state_lock:
         return _global_scan_state.copy()
 
 
 def _reset_global_state() -> None:
-    """Reset global state to idle."""
     with _global_state_lock:
         _global_scan_state.update({
             "status": "idle",
             "total_photos": 0,
-            "scanned_photos": 0,
+            "processed_photos": 0,
+            "started_at": None,
+            "eta_seconds": None,
+            "progress_percent": 0,
             "message": "Ready",
             "current_job_id": None,
             "error": None,
@@ -57,106 +84,89 @@ def _reset_global_state() -> None:
 
 
 def _update_job(job_id: str, **kwargs) -> None:
-    """Thread-safe job state update."""
     with _jobs_lock:
         if job_id in _jobs:
             _jobs[job_id].update(kwargs)
 
 
 def _get_job(job_id: str) -> Dict:
-    """Thread-safe job state retrieval."""
     with _jobs_lock:
         return _jobs.get(job_id, {}).copy()
 
 
 def _create_job(job_id: str, initial_state: Dict) -> None:
-    """Thread-safe job creation."""
     with _jobs_lock:
         _jobs[job_id] = initial_state.copy()
 
 
+def _compute_eta_seconds(started_at: Optional[str], processed: int, total: int) -> Optional[int]:
+    if not started_at or total <= 0 or processed <= 0:
+        return None
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return None
+    elapsed = (datetime.now() - started).total_seconds()
+    if elapsed <= 0:
+        return None
+    rate = processed / elapsed
+    if rate <= 0:
+        return None
+    remaining = max(0, total - processed)
+    return int(remaining / rate)
+
+
 async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
-    """Background task to process a folder using two-phase approach.
-    
-    Phase 1: Import photos with metadata (fast) - allows immediate display in dashboard
-    Phase 2: AI processing for faces and objects (slow) - runs after all imports complete
-    """
     _update_job(job_id, status="processing", progress=0.0, message="Scanning folder...", phase="import")
     _update_global_state(
         status="scanning",
         total_photos=0,
-        scanned_photos=0,
+        processed_photos=0,
+        started_at=datetime.now().isoformat(),
+        eta_seconds=None,
+        progress_percent=0,
         message="Scanning folder...",
         current_job_id=job_id,
         error=None,
     )
 
-    # Lazy import to avoid blocking server startup
     from services.ml.pipeline import MLPipeline
     pipeline = MLPipeline()
 
     try:
-        # Validate folder path for safety
         try:
             folder = _validate_folder_path(folder_path)
         except ValueError as e:
             _update_job(job_id, status="error", message=str(e))
-            _update_global_state(status="paused", message=str(e), error=str(e))
+            _update_global_state(status="error", message=str(e), error=str(e))
             return
-        
-        # Find all images - comprehensive list of supported image formats
-        # Supported by PIL/Pillow and OpenCV
+
         image_extensions = {
-            # JPEG variants
             ".jpg", ".jpeg", ".jpe", ".jfif",
-            # JPEG 2000
             ".jp2", ".j2k", ".jpc", ".jpx",
-            # PNG
             ".png",
-            # GIF
             ".gif",
-            # BMP variants
             ".bmp", ".dib",
-            # TIFF variants
             ".tiff", ".tif",
-            # WebP
             ".webp",
-            # HEIC/HEIF (modern Apple formats)
             ".heic", ".heif",
-            # AVIF
             ".avif",
-            # ICO
             ".ico",
-            # PPM/PGM/PBM/PNM
             ".ppm", ".pgm", ".pbm", ".pnm",
-            # XBM/XPM
             ".xbm", ".xpm",
-            # PCX
             ".pcx",
-            # TGA
             ".tga",
-            # SGI
             ".sgi",
-            # SPIDER
             ".spider",
-            # DDS
             ".dds",
-            # ICNS
             ".icns",
-            # EPS
             ".eps", ".epi", ".epsf", ".epsi",
-            # WMF
             ".wmf",
-            # EXR
             ".exr",
-            # HDR
             ".hdr",
-            # Sun Raster
             ".sr", ".ras",
-            # PIC
             ".pic",
         }
-        image_paths = []
         if recursive:
             image_paths = [str(p) for p in folder.rglob("*") if p.suffix.lower() in image_extensions]
         else:
@@ -164,20 +174,15 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
 
         total = len(image_paths)
         _update_job(job_id, message=f"Found {total} images")
-        _update_global_state(total_photos=total, message=f"Found {total} images")
+        _update_global_state(total_photos=total, processed_photos=0, message=f"Found {total} images", progress_percent=0)
 
-        # Handle empty folder
         if total == 0:
             _update_job(job_id, status="completed", progress=1.0, message="No photos found to import")
-            _update_global_state(status="idle", message="No photos to scan", scanned_photos=0)
+            _update_global_state(status="completed", message="No photos to scan", processed_photos=0, progress_percent=100, eta_seconds=0)
             return
 
-        # ============================================
-        # PHASE 1: Import photos with metadata (fast)
-        # Progress: 0% - 50%
-        # ============================================
         _update_job(job_id, phase="import")
-        imported_photos = []  # List of (photo_id, photo_path) tuples
+        imported_photos = []
         
         for idx, image_path in enumerate(image_paths):
             try:
@@ -189,35 +194,28 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             except Exception as e:
                 logging.error(f"Failed to import {image_path}: {str(e)}")
 
-            # Progress for Phase 1: 0% to 50%
             progress = (idx + 1) / total * 0.5 if total > 0 else 0.5
             msg = f"Importing photos... {idx + 1}/{total}"
+            eta_seconds = _compute_eta_seconds(_get_global_state().get("started_at"), idx + 1, total)
             _update_job(job_id, progress=progress, message=msg)
-            _update_global_state(scanned_photos=idx + 1, message=msg)
-            
-            # Yield to event loop to allow status endpoint to respond
+            _update_global_state(
+                processed_photos=idx + 1,
+                message=msg,
+                progress_percent=int(progress * 100),
+                eta_seconds=eta_seconds,
+            )
             await asyncio.sleep(0)
 
-        # Mark Phase 1 complete - photos are now visible in dashboard
         msg = f"Import complete: {len(imported_photos)} photos ready. Starting AI analysis..."
         _update_job(job_id, message=msg, phase="scanning")
-        _update_global_state(status="indexing", message=msg)
+        _update_global_state(status="indexing", processed_photos=0, message=msg, progress_percent=50, eta_seconds=None)
 
-        # ============================================
-        # PHASE 2: AI Processing (face/object detection)
-        # Progress: 50% - 100%
-        # OPTIMIZATION: Process in batches, defer FAISS saves
-        # ============================================
         processed = 0
         total_faces = 0
         total_objects = 0
         total_to_process = len(imported_photos)
-        
-        # Batch size for optimal CPU throughput
-        BATCH_SIZE = 8
-        
-        for batch_start in range(0, total_to_process, BATCH_SIZE):
-            batch_end = min(batch_start + BATCH_SIZE, total_to_process)
+        for batch_start in range(0, total_to_process, SCAN_BATCH_SIZE):
+            batch_end = min(batch_start + SCAN_BATCH_SIZE, total_to_process)
             batch = imported_photos[batch_start:batch_end]
             
             for photo_id, image_path in batch:
@@ -228,28 +226,29 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
                     objects_found = len(result.get("objects", []))
                     total_faces += faces_found
                     total_objects += objects_found
-                    logging.info(f"Processed {image_path}: {faces_found} faces, {objects_found} objects")
                 except Exception as e:
                     logging.error(f"Failed to process ML for {image_path}: {str(e)}", exc_info=True)
+                
+                # Update progress after each photo and yield to allow status endpoint to respond
+                progress = 0.5 + (processed / total_to_process) * 0.5 if total_to_process > 0 else 1.0
+                msg = f"Analyzing photos... {processed}/{total_to_process}"
+                eta_seconds = _compute_eta_seconds(_get_global_state().get("started_at"), processed, total_to_process)
+                _update_job(job_id, progress=progress, message=msg)
+                _update_global_state(
+                    processed_photos=processed,
+                    total_photos=total_to_process,
+                    message=msg,
+                    progress_percent=int(progress * 100),
+                    eta_seconds=eta_seconds,
+                )
+                await asyncio.sleep(0)
 
-            # Save all dirty FAISS indices after each batch
             pipeline.index.save_all_dirty()
-            
-            # Progress for Phase 2: 50% to 100%
-            progress = 0.5 + (idx + 1) / total_to_process * 0.5 if total_to_process > 0 else 1.0
-            msg = f"Analyzing photos... {idx + 1}/{total_to_process}"
-            _update_job(job_id, progress=progress, message=msg)
-            _update_global_state(scanned_photos=idx + 1, total_photos=total_to_process, message=msg)
-            
-            # Yield to event loop to allow status endpoint to respond
-            await asyncio.sleep(0)
 
-        # Run clustering (always cluster after bulk import)
         _update_job(job_id, message="Organizing faces...")
         _update_global_state(message="Organizing faces...")
         cluster_result = await pipeline.cluster_faces()
         
-        # Build summary message
         clusters = cluster_result.get("clusters", 0)
         faces_clustered = cluster_result.get("faces_clustered", 0)
         final_msg = f"Completed: {len(imported_photos)} photos, {total_faces} faces, {clusters} people found"
@@ -261,22 +260,34 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             message=final_msg
         )
         _update_global_state(
-            status="done",
-            scanned_photos=total_to_process,
+            status="completed",
+            processed_photos=total_to_process,
             message=final_msg,
+            progress_percent=100,
+            eta_seconds=0,
         )
         logging.info(f"Scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         _update_job(job_id, status="error", message=error_msg)
-        _update_global_state(status="paused", message="Scan paused", error=error_msg)
+        _update_global_state(status="error", message="Scan failed", error=error_msg)
 
 
 @router.post("", response_model=ScanResponse)
 async def scan_folder(request: ScanRequest, background_tasks: BackgroundTasks):
-    """Start scanning a folder."""
     job_id = str(uuid.uuid4())
+    _update_global_state(
+        status="scanning",
+        total_photos=0,
+        processed_photos=0,
+        started_at=datetime.now().isoformat(),
+        eta_seconds=None,
+        progress_percent=0,
+        message="Scan starting...",
+        current_job_id=job_id,
+        error=None,
+    )
     _create_job(job_id, {
         "status": "queued",
         "progress": 0.0,
@@ -294,75 +305,28 @@ async def scan_folder(request: ScanRequest, background_tasks: BackgroundTasks):
 
 @router.get("/status", response_model=GlobalScanStatusResponse)
 async def get_global_scan_status():
-    """Get global scan status for progress tracking.
-    
-    Returns the current state of any active scan, or idle status with library stats.
-    This endpoint is polled by the frontend to show progress.
-    """
     state = _get_global_state()
-    
-    # If idle or done, get library stats from database
-    if state["status"] in ("idle", "done"):
-        try:
-            from services.ml.storage.sqlite_store import SQLiteStore
-            store = SQLiteStore()
-            stats = store.get_statistics()
-            total_photos = stats.get("total_photos", 0)
-            
-            # Determine appropriate message
-            if total_photos == 0:
-                message = "No photos to scan"
-            else:
-                message = "Up to date"
-            
-            return GlobalScanStatusResponse(
-                status="idle",
-                total_photos=total_photos,
-                scanned_photos=total_photos,
-                progress_percent=100,
-                message=message,
-                current_job_id=None,
-            )
-        except Exception:
-            # Fallback if database is unavailable
-            return GlobalScanStatusResponse(
-                status="idle",
-                total_photos=0,
-                scanned_photos=0,
-                progress_percent=100,
-                message="Ready",
-                current_job_id=None,
-            )
-    
-    # Active scan - return current progress
     total = state.get("total_photos", 0)
-    scanned = state.get("scanned_photos", 0)
-    progress_percent = int((scanned / total * 100) if total > 0 else 0)
-    
-    # If paused (error state), keep progress but show paused status
-    if state["status"] == "paused":
-        return GlobalScanStatusResponse(
-            status="paused",
-            total_photos=total,
-            scanned_photos=scanned,
-            progress_percent=progress_percent,
-            message=state.get("message", "Scan paused"),
-            current_job_id=state.get("current_job_id"),
-        )
-    
+    processed = state.get("processed_photos", 0)
+    progress_percent = int(state.get("progress_percent") or 0)
+    if progress_percent <= 0:
+        progress_percent = int((processed / total * 100) if total > 0 else 0)
+
     return GlobalScanStatusResponse(
-        status=state["status"],
+        status=state.get("status", "idle"),
         total_photos=total,
-        scanned_photos=scanned,
+        processed_photos=processed,
         progress_percent=progress_percent,
-        message=state.get("message", "Working..."),
+        message=state.get("message", "Ready"),
         current_job_id=state.get("current_job_id"),
+        started_at=state.get("started_at"),
+        eta_seconds=state.get("eta_seconds"),
+        error=state.get("error"),
     )
 
 
 @router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
-    """Get status of a background job."""
     job = _get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -377,12 +341,14 @@ async def get_job_status(job_id: str):
 
 
 async def scan_faces_async(job_id: str):
-    """Background task to scan faces for already-imported photos."""
     _update_job(job_id, status="processing", progress=0.0, message="Loading photos...", phase="scanning")
     _update_global_state(
         status="scanning",
         total_photos=0,
-        scanned_photos=0,
+        processed_photos=0,
+        started_at=datetime.now().isoformat(),
+        eta_seconds=None,
+        progress_percent=0,
         message="Loading photos...",
         current_job_id=job_id,
         error=None,
@@ -395,17 +361,16 @@ async def scan_faces_async(job_id: str):
     store = SQLiteStore()
 
     try:
-        # Get all photos from database
         photos = store.get_all_photos()
         total = len(photos)
         
         if total == 0:
             _update_job(job_id, status="completed", progress=1.0, message="No photos found to scan")
-            _update_global_state(status="idle", message="No photos to scan", scanned_photos=0)
+            _update_global_state(status="completed", message="No photos to scan", processed_photos=0, progress_percent=100, eta_seconds=0)
             return
 
         _update_job(job_id, message=f"Found {total} photos to scan")
-        _update_global_state(total_photos=total, message=f"Found {total} photos to scan")
+        _update_global_state(total_photos=total, processed_photos=0, message=f"Found {total} photos to scan", progress_percent=0)
         
         processed = 0
         total_faces = 0
@@ -415,57 +380,27 @@ async def scan_faces_async(job_id: str):
                 photo_id = photo["id"]
                 photo_path = photo["file_path"]
                 
-                # Check if file exists
                 if not Path(photo_path).exists():
                     logging.warning(f"Photo file not found: {photo_path}")
                     continue
                 
-                # Run face/object detection
                 result = await pipeline.process_photo_ml(photo_id, photo_path)
                 processed += 1
                 faces_found = len(result.get("faces", []))
                 objects_found = len(result.get("objects", []))
                 total_faces += faces_found
                 total_objects += objects_found
-                logging.info(f"Processed {photo_path}: {faces_found} faces, {objects_found} objects")
             except Exception as e:
                 logging.error(f"Failed to scan faces for photo {photo.get('id')}: {str(e)}", exc_info=True)
 
             progress = (idx + 1) / total if total > 0 else 1.0
             msg = f"Scanning faces... {idx + 1}/{total}"
+            eta_seconds = _compute_eta_seconds(_get_global_state().get("started_at"), idx + 1, total)
             _update_job(job_id, progress=progress, message=msg)
-            _update_global_state(scanned_photos=idx + 1, message=msg)
-            
-            for photo in batch:
-                try:
-                    photo_id = photo["id"]
-                    photo_path = photo["file_path"]
-                    
-                    # Check if file exists
-                    if not Path(photo_path).exists():
-                        logging.warning(f"Photo file not found: {photo_path}")
-                        continue
-                    
-                    # Run face/object detection
-                    result = await pipeline.process_photo_ml(photo_id, photo_path)
-                    processed += 1
-                    faces_found = len(result.get("faces", []))
-                    objects_found = len(result.get("objects", []))
-                    total_faces += faces_found
-                    total_objects += objects_found
-                    logging.info(f"Processed {photo_path}: {faces_found} faces, {objects_found} objects")
-                except Exception as e:
-                    logging.error(f"Failed to scan faces for photo {photo.get('id')}: {str(e)}", exc_info=True)
+            _update_global_state(processed_photos=idx + 1, message=msg, progress_percent=int(progress * 100), eta_seconds=eta_seconds)
 
-            # Save all dirty FAISS indices after each batch
-            pipeline.index.save_all_dirty()
-            
-            progress = batch_end / total if total > 0 else 1.0
-            _update_job(job_id, progress=progress, message=f"Scanning faces... {batch_end}/{total}")
-
-        # Run clustering
         _update_job(job_id, message="Organizing faces...")
-        _update_global_state(status="indexing", message="Organizing faces...")
+        _update_global_state(status="indexing", message="Organizing faces...", eta_seconds=None)
         cluster_result = await pipeline.cluster_faces()
 
         clusters = cluster_result.get("clusters", 0)
@@ -478,22 +413,34 @@ async def scan_faces_async(job_id: str):
             message=final_msg
         )
         _update_global_state(
-            status="done",
-            scanned_photos=total,
+            status="completed",
+            processed_photos=total,
             message=final_msg,
+            progress_percent=100,
+            eta_seconds=0,
         )
         logging.info(f"Face scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         _update_job(job_id, status="error", message=error_msg)
-        _update_global_state(status="paused", message="Scan paused", error=error_msg)
+        _update_global_state(status="error", message="Scan failed", error=error_msg)
 
 
 @router.post("/faces", response_model=ScanResponse)
 async def scan_faces(background_tasks: BackgroundTasks):
-    """Start face scanning for all already-imported photos."""
     job_id = str(uuid.uuid4())
+    _update_global_state(
+        status="scanning",
+        total_photos=0,
+        processed_photos=0,
+        started_at=datetime.now().isoformat(),
+        eta_seconds=None,
+        progress_percent=0,
+        message="Scan starting...",
+        current_job_id=job_id,
+        error=None,
+    )
     _create_job(job_id, {
         "status": "queued",
         "progress": 0.0,

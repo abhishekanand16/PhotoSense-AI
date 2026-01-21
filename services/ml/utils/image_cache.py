@@ -1,17 +1,10 @@
-"""
-Single-decode image cache for PhotoSense-AI performance optimization.
-
-Provides:
-- Single image decode per photo (shared across all ML models)
-- Pre-resized versions for different ML tasks
-- Memory-efficient temporary storage during processing
-"""
-
 import cv2
 import numpy as np
 from PIL import Image
 from typing import Dict, Optional, Tuple
 import logging
+
+from services.config import IMAGE_CACHE_SIZES
 
 
 class ImageCache:
@@ -20,10 +13,9 @@ class ImageCache:
     Ensures each image is decoded exactly once per photo.
     """
     
-    # Maximum sizes for different ML tasks (preserves aspect ratio)
-    SIZE_FACE = 1024  # Face detection max side
-    SIZE_ML = 768     # Object/scene/embedding max side
-    SIZE_FLORENCE = 1024  # Florence captioning max side
+    SIZE_FACE = IMAGE_CACHE_SIZES["face"]
+    SIZE_ML = IMAGE_CACHE_SIZES["ml"]
+    SIZE_FLORENCE = IMAGE_CACHE_SIZES["florence"]
     
     def __init__(self):
         self._cache: Dict[str, Dict] = {}

@@ -6,8 +6,6 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import "leaflet.markercluster";
 import { PhotoLocation } from "../services/api";
 
-// Fix default marker icons issue with Leaflet + bundlers
-// @ts-ignore
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
@@ -39,7 +37,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const markersRef = useRef<L.MarkerClusterGroup | null>(null);
   const selectedMarkerRef = useRef<L.Marker | null>(null);
 
-  // Calculate map center from locations
   const center = useMemo(() => {
     if (locations.length === 0) {
       return [20, 0] as [number, number]; // World center
@@ -49,11 +46,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
     return [avgLat, avgLon] as [number, number];
   }, [locations]);
 
-  // Initialize map
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    // Create map
     const map = L.map(containerRef.current, {
       center: center,
       zoom: locations.length === 0 ? 2 : defaultZoom,
@@ -61,7 +56,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
       zoomControl: true,
     });
 
-    // Add OpenStreetMap tiles
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       maxZoom: 19,
@@ -69,7 +63,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
     mapRef.current = map;
 
-    // Cleanup on unmount
     return () => {
       if (mapRef.current) {
         mapRef.current.remove();
@@ -78,19 +71,16 @@ const MapComponent: React.FC<MapComponentProps> = ({
     };
   }, []);
 
-  // Update markers when locations change
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    // Remove existing markers
     if (markersRef.current) {
       map.removeLayer(markersRef.current);
     }
 
     if (locations.length === 0) return;
 
-    // Create marker cluster group
     const markers = L.markerClusterGroup({
       chunkedLoading: true,
       maxClusterRadius: 50,
@@ -111,7 +101,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
       },
     });
 
-    // Add markers for each location
     const markerMap = new Map<number, L.Marker>();
     
     locations.forEach((loc) => {
@@ -119,7 +108,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
         title: loc.city || loc.region || loc.country || "Photo",
       });
 
-      // Store photo_id in marker options
       (marker.options as any).photoId = loc.photo_id;
 
       marker.on("click", () => {
@@ -128,7 +116,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
         }
       });
 
-      // Add popup with location name
       const locationName = [loc.city, loc.region, loc.country]
         .filter(Boolean)
         .join(", ") || "Unknown location";
@@ -138,7 +125,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
       markerMap.set(loc.photo_id, marker);
     });
 
-    // Handle cluster clicks
     markers.on("clusterclick", (e: any) => {
       const cluster = e.layer;
       const childMarkers = cluster.getAllChildMarkers();
@@ -149,14 +135,12 @@ const MapComponent: React.FC<MapComponentProps> = ({
         onClusterClick(bounds, photoIds);
       }
 
-      // Zoom to cluster bounds
       map.fitBounds(bounds, { padding: [50, 50] });
     });
 
     map.addLayer(markers);
     markersRef.current = markers;
 
-    // Fit map to show all markers
     if (locations.length > 0) {
       const bounds = markers.getBounds();
       if (bounds.isValid()) {
@@ -165,21 +149,17 @@ const MapComponent: React.FC<MapComponentProps> = ({
     }
   }, [locations, onClusterClick, onMarkerClick]);
 
-  // Handle selected photo highlighting
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !selectedPhotoId) return;
 
-    // Find the location for the selected photo
     const selectedLocation = locations.find((loc) => loc.photo_id === selectedPhotoId);
     if (!selectedLocation) return;
 
-    // Remove previous selected marker
     if (selectedMarkerRef.current) {
       map.removeLayer(selectedMarkerRef.current);
     }
 
-    // Create a highlighted marker for the selected photo
     const highlightIcon = L.divIcon({
       html: `<div class="selected-marker-pulse"></div>`,
       className: "selected-marker",
@@ -195,7 +175,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
     highlightMarker.addTo(map);
     selectedMarkerRef.current = highlightMarker;
 
-    // Pan to the selected location smoothly
     map.setView([selectedLocation.latitude, selectedLocation.longitude], 
       Math.max(map.getZoom(), 10), 
       { animate: true }
@@ -208,12 +187,10 @@ const MapComponent: React.FC<MapComponentProps> = ({
     };
   }, [selectedPhotoId, locations]);
 
-  // Update map center when it changes
   useEffect(() => {
     const map = mapRef.current;
     if (!map || locations.length === 0) return;
     
-    // Only recenter if we have a significant change
     const currentCenter = map.getCenter();
     const distance = map.distance(currentCenter, L.latLng(center[0], center[1]));
     if (distance > 100000) { // More than 100km difference

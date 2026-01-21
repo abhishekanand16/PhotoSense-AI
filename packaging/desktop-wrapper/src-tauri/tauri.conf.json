@@ -1,8 +1,9 @@
 {
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm --prefix ../../../apps/desktop run dev",
+    "beforeBuildCommand": "npm --prefix ../../../apps/desktop run build",
     "devPath": "http://localhost:1420",
+    "distDir": "../../../apps/desktop/dist",
     "withGlobalTauri": false
   },
   "package": {
@@ -26,7 +27,6 @@
         "readDir": true,
         "scope": [
           "$APPDATA/**",
-          "$APPDATA/PhotoSense-AI/**",
           "$DOCUMENT/**",
           "$PICTURE/**",
           "**"
@@ -36,16 +36,10 @@
         "asset": true,
         "assetScope": [
           "$APPDATA/**",
-          "$APPDATA/PhotoSense-AI/**",
           "$DOCUMENT/**",
           "$PICTURE/**",
           "**"
         ]
-      },
-      "process": {
-        "all": false,
-        "exit": true,
-        "relaunch": true
       }
     },
     "bundle": {
@@ -53,11 +47,14 @@
       "targets": "all",
       "identifier": "com.photosense.ai",
       "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/128x128@2x.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
+        "../../../apps/desktop/src-tauri/icons/32x32.png",
+        "../../../apps/desktop/src-tauri/icons/128x128.png",
+        "../../../apps/desktop/src-tauri/icons/128x128@2x.png",
+        "../../../apps/desktop/src-tauri/icons/icon.icns",
+        "../../../apps/desktop/src-tauri/icons/icon.ico"
+      ],
+      "externalBin": [
+        "bin/photosense-backend"
       ]
     },
     "security": {
