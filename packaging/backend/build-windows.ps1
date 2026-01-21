@@ -3,13 +3,10 @@
 # Creates a standalone executable that can run without Python installed
 #
 
-$ErrorActionPreference = "Stop"
-
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = (Get-Item "$ScriptDir\..\..").FullName
 $OutputDir = "$ScriptDir\..\dist\backend"
 $PortableDir = "$ScriptDir\.python-portable"
-$VenvDir = "$ScriptDir\.build-venv"
 
 Write-Host "============================================================"
 Write-Host "Building PhotoSense-AI Backend for Windows"
@@ -106,12 +103,13 @@ function Install-PortablePython {
         # Create site-packages
         New-Item -ItemType Directory -Force -Path "$PortableDir\Lib\site-packages" | Out-Null
         
-        # Install pip
+        # Install pip (suppress warnings)
         Write-Host "Installing pip..."
         $getPipUrl = "https://bootstrap.pypa.io/get-pip.py"
         $getPipFile = "$PortableDir\get-pip.py"
         Invoke-WebRequest -Uri $getPipUrl -OutFile $getPipFile -UseBasicParsing
-        & "$PortableDir\python.exe" $getPipFile --no-warn-script-location 2>&1 | Out-Null
+        $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
+        & "$PortableDir\python.exe" $getPipFile --no-warn-script-location 2>$null
         Remove-Item $getPipFile -Force -ErrorAction SilentlyContinue
         
         Write-Host "Python installed successfully!" -ForegroundColor Green
@@ -120,6 +118,18 @@ function Install-PortablePython {
         Write-Host "ERROR: Failed to install Python: $_" -ForegroundColor Red
         return $null
     }
+}
+
+# Helper function to run pip commands (ignores warnings)
+function Invoke-Pip {
+    param(
+        [string]$PythonExe,
+        [string[]]$Arguments
+    )
+    
+    $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
+    $process = Start-Process -FilePath $PythonExe -ArgumentList (@("-m", "pip") + $Arguments) -NoNewWindow -Wait -PassThru
+    return $process.ExitCode
 }
 
 # ============================================================
@@ -143,6 +153,7 @@ if (-not $pythonExe) {
         Write-Host ""
         Write-Host "Please install Python from https://python.org/downloads"
         Write-Host "IMPORTANT: Check 'Add Python to PATH' during installation"
+        Read-Host "Press Enter to exit"
         exit 1
     }
 }
@@ -152,43 +163,60 @@ Write-Host "Using Python: $pythonExe"
 $verOut = & $pythonExe --version 2>&1
 Write-Host "Version: $verOut"
 
-# Install dependencies directly (no venv - simpler and works with portable Python)
+# Install dependencies
 Write-Host ""
 Write-Host "============================================================"
 Write-Host "Installing dependencies (this takes 10-20 minutes first time)..."
 Write-Host "============================================================"
 Write-Host ""
 
-& $pythonExe -m pip install --upgrade pip 2>&1 | Out-Host
-& $pythonExe -m pip install pyinstaller 2>&1 | Out-Host
+Write-Host "Upgrading pip..."
+$exitCode = Invoke-Pip -PythonExe $pythonExe -Arguments @("install", "--upgrade", "pip", "--no-warn-script-location", "-q")
 
-Write-Host ""
-Write-Host "Installing project requirements..."
-& $pythonExe -m pip install -r "$ProjectRoot\requirements.txt" 2>&1 | Out-Host
+Write-Host "Installing PyInstaller..."
+$exitCode = Invoke-Pip -PythonExe $pythonExe -Arguments @("install", "pyinstaller", "--no-warn-script-location", "-q")
+if ($exitCode -ne 0) {
+    Write-Host "ERROR: Failed to install PyInstaller" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
+}
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Failed to install dependencies" -ForegroundColor Red
+Write-Host "Installing project requirements (this is the slow part)..."
+Write-Host "Installing: torch, transformers, ultralytics, insightface, etc."
+$exitCode = Invoke-Pip -PythonExe $pythonExe -Arguments @("install", "-r", "$ProjectRoot\requirements.txt", "--no-warn-script-location")
+if ($exitCode -ne 0) {
+    Write-Host "ERROR: Failed to install project dependencies" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
     exit 1
 }
 
 # Clean previous build
 Write-Host ""
 Write-Host "Cleaning previous build..."
-if (Test-Path "$ScriptDir\build") { Remove-Item -Recurse -Force "$ScriptDir\build" }
-if (Test-Path "$ScriptDir\dist") { Remove-Item -Recurse -Force "$ScriptDir\dist" }
-if (Test-Path $OutputDir) { Remove-Item -Recurse -Force $OutputDir }
+if (Test-Path "$ScriptDir\build") { Remove-Item -Recurse -Force "$ScriptDir\build" -ErrorAction SilentlyContinue }
+if (Test-Path "$ScriptDir\dist") { Remove-Item -Recurse -Force "$ScriptDir\dist" -ErrorAction SilentlyContinue }
+if (Test-Path $OutputDir) { Remove-Item -Recurse -Force $OutputDir -ErrorAction SilentlyContinue }
 
 # Run PyInstaller
 Write-Host ""
 Write-Host "============================================================"
-Write-Host "Running PyInstaller..."
+Write-Host "Running PyInstaller (this takes 5-10 minutes)..."
 Write-Host "============================================================"
 Write-Host ""
-Set-Location $ScriptDir
-& $pythonExe -m PyInstaller photosense_backend.spec --noconfirm 2>&1 | Out-Host
 
-if ($LASTEXITCODE -ne 0) {
+Set-Location $ScriptDir
+$pyinstallerProcess = Start-Process -FilePath $pythonExe -ArgumentList @("-m", "PyInstaller", "photosense_backend.spec", "--noconfirm") -NoNewWindow -Wait -PassThru
+
+if ($pyinstallerProcess.ExitCode -ne 0) {
     Write-Host "ERROR: PyInstaller failed" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
+# Check if dist folder was created
+if (-not (Test-Path "$ScriptDir\dist\photosense-backend")) {
+    Write-Host "ERROR: PyInstaller did not create expected output" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
     exit 1
 }
 
@@ -196,7 +224,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "Moving build artifacts..."
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-Move-Item "$ScriptDir\dist\photosense-backend" "$OutputDir\"
+Move-Item "$ScriptDir\dist\photosense-backend" "$OutputDir\" -Force
 
 # Create version info
 Write-Host "Creating version info..."
@@ -209,11 +237,13 @@ Platform: Windows
 
 # Cleanup
 Write-Host "Cleaning up..."
-if (Test-Path "$ScriptDir\build") { Remove-Item -Recurse -Force "$ScriptDir\build" }
-if (Test-Path "$ScriptDir\dist") { Remove-Item -Recurse -Force "$ScriptDir\dist" }
+if (Test-Path "$ScriptDir\build") { Remove-Item -Recurse -Force "$ScriptDir\build" -ErrorAction SilentlyContinue }
+if (Test-Path "$ScriptDir\dist") { Remove-Item -Recurse -Force "$ScriptDir\dist" -ErrorAction SilentlyContinue }
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "Backend build complete!" -ForegroundColor Green
 Write-Host "Output: $OutputDir\photosense-backend\" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "Next step: Run frontend build to create the installer."
