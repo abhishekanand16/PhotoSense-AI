@@ -37,7 +37,7 @@ PhotoSense-AI is a desktop application that automatically understands your photo
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/PhotoSense-AI.git
+git clone https://github.com/abhishekanand16/PhotoSense-AI.git
 cd PhotoSense-AI
 ```
 
