@@ -144,6 +144,40 @@ def apply_patch():
         return
     
     try:
+        # -------------------------------------------------------------------
+        # 1) Patch scikit-image deprecation source directly (belt-and-suspenders)
+        #
+        # InsightFace's own face_align.py may call:
+        #   tform = SimilarityTransform()
+        #   tform.estimate(lmk, dst)  # deprecated in skimage>=0.26
+        #
+        # Even if InsightFace imported this earlier, patching the method removes
+        # the FutureWarning and preserves behavior.
+        # -------------------------------------------------------------------
+        try:
+            from skimage.transform import SimilarityTransform
+
+            if not hasattr(SimilarityTransform, "_photosense_original_estimate"):
+                SimilarityTransform._photosense_original_estimate = SimilarityTransform.estimate
+
+                def _estimate_no_warn(self, src, dst, *args, **kwargs):
+                    # New API: SimilarityTransform.from_estimate(src, dst)
+                    try:
+                        t = SimilarityTransform.from_estimate(src, dst)
+                        self.params = t.params
+                        return True
+                    except Exception:
+                        # Fallback to original method if something unexpected happens
+                        return SimilarityTransform._photosense_original_estimate(self, src, dst, *args, **kwargs)
+
+                SimilarityTransform.estimate = _estimate_no_warn
+        except Exception:
+            # If scikit-image isn't present or API differs, ignore.
+            pass
+
+        # -------------------------------------------------------------------
+        # 2) Patch InsightFace face_align helpers (fast Umeyama implementation)
+        # -------------------------------------------------------------------
         from insightface.utils import face_align
         
         # Store originals for potential rollback

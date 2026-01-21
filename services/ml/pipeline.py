@@ -227,12 +227,13 @@ class MLPipeline:
         """
         import logging
         from services.ml.utils.image_cache import get_image_cache
-        
-        results = {
+
+        results: Dict = {
             "photo_id": photo_id,
             "faces": [],
             "objects": [],
             "pets": [],
+            "scenes": [],
             "image_embedding_id": None,
         }
 
@@ -242,244 +243,225 @@ class MLPipeline:
             photo_path = str(validated_path)
         except ValueError as e:
             logging.error(f"Invalid photo path: {e}")
-            return {"status": "error", "reason": str(e)}
+            try:
+                self.store.mark_photo_ml_error(photo_id, str(e))
+            except Exception:
+                pass
+            return {"status": "error", "reason": str(e), **results}
 
-        # =======================================================================
-        # SINGLE DECODE: Load and cache image once, share across all ML models
-        # =======================================================================
-        image_cache = get_image_cache()
-        cached = image_cache.decode_image(photo_path)
-        
-        if cached is None:
-            logging.error(f"Could not decode image: {photo_path}")
-            return {"status": "error", "reason": "decode_failed"}
-        
-        # Extract cached images and scale factors
-        face_image = cached['face_bgr']
-        face_scale = cached['scale_factors']['face']
-        ml_image_bgr = cached['ml_bgr']
-        ml_image_rgb = cached['ml_rgb']
-        ml_scale = cached['scale_factors']['ml']
-        florence_image = cached['florence_rgb']
-        original_bgr = cached['original_bgr']
-
-        # =======================================================================
-        # FACE DETECTION with pre-resized image
-        # =======================================================================
-        face_detections = self.face_detector.detect_with_embeddings(
-            photo_path, 
-            image_bgr=face_image, 
-            scale_factor=face_scale
-        )
-        
-        # Collect faces to add to FAISS after all DB commits succeed
-        faces_for_faiss = []
-        auto_assigned_count = 0
-        
-        for face_data in face_detections:
-            x, y, w, h = face_data['bbox']
-            conf = face_data['confidence']
-            embedding = face_data['embedding']
-            
-            # =====================================================================
-            # PERSISTENT IDENTITY LEARNING
-            # Before storing, search for similar faces in FAISS
-            # If we find a strong match to a known person, auto-assign this face
-            # =====================================================================
-            auto_person_id = None
-            
-            if conf >= CLUSTERING_CONFIG["min_confidence"]:
-                try:
-                    auto_person_id = self._find_matching_person(embedding)
-                    if auto_person_id:
-                        auto_assigned_count += 1
-                        logging.info(f"Auto-assigned face to person {auto_person_id} (similarity match)")
-                except Exception as e:
-                    logging.warning(f"Identity matching failed: {str(e)}")
-            
-            # Store face + embedding atomically in DB (single transaction)
-            face_id = self.store.add_face_with_embedding(
-                photo_id=photo_id,
-                bbox_x=x,
-                bbox_y=y,
-                bbox_w=w,
-                bbox_h=h,
-                confidence=conf,
-                embedding=embedding,
-                person_id=auto_person_id,  # May be None if no match found
-            )
-
-            # Queue for FAISS update (only after DB commit succeeded)
-            faces_for_faiss.append((face_id, embedding))
-            results["faces"].append(face_id)
-
-        # Add to FAISS index AFTER all DB operations succeed
-        for face_id, embedding in faces_for_faiss:
-            self.index.add_vectors("face", embedding.reshape(1, -1), [face_id])
-        # Note: FAISS save is deferred to batch level (scan.py calls save_all_dirty)
-        
-        if auto_assigned_count > 0:
-            logging.info(f"Auto-assigned {auto_assigned_count} faces to known people")
-
-        # =======================================================================
-        # OBJECT DETECTION with pre-resized image
-        # =======================================================================
+        # Skip already-processed photos (prevents rescanning)
         try:
-            object_detections = self.object_detector.detect(
-                photo_path, 
-                image_bgr=ml_image_bgr, 
-                scale_factor=ml_scale
+            if self.store.is_photo_ml_processed(photo_id):
+                return {"status": "skipped", "reason": "already_processed", **results}
+        except Exception:
+            # If schema is older or check fails, proceed with processing.
+            pass
+
+        image_cache = get_image_cache()
+        try:
+            cached = image_cache.decode_image(photo_path)
+            if cached is None:
+                logging.error(f"Could not decode image: {photo_path}")
+                try:
+                    self.store.mark_photo_ml_error(photo_id, "decode_failed")
+                except Exception:
+                    pass
+                return {"status": "error", "reason": "decode_failed", **results}
+
+            # Extract cached images and scale factors
+            face_image = cached["face_bgr"]
+            face_scale = cached["scale_factors"]["face"]
+            ml_image_bgr = cached["ml_bgr"]
+            ml_image_rgb = cached["ml_rgb"]
+            ml_scale = cached["scale_factors"]["ml"]
+            florence_image = cached["florence_rgb"]
+            original_bgr = cached["original_bgr"]
+
+            # =======================================================================
+            # FACE DETECTION (with embeddings)
+            # =======================================================================
+            face_detections = self.face_detector.detect_with_embeddings(
+                photo_path,
+                image_bgr=face_image,
+                scale_factor=face_scale,
             )
-            for x, y, w, h, category, conf in object_detections:
-                object_id = self.store.add_object(
+
+            faces_for_faiss = []
+            auto_assigned_count = 0
+            for face_data in face_detections:
+                x, y, w, h = face_data["bbox"]
+                conf = face_data["confidence"]
+                embedding = face_data["embedding"]
+
+                auto_person_id = None
+                if conf >= CLUSTERING_CONFIG["min_confidence"]:
+                    try:
+                        auto_person_id = self._find_matching_person(embedding)
+                        if auto_person_id:
+                            auto_assigned_count += 1
+                            logging.info(f"Auto-assigned face to person {auto_person_id} (similarity match)")
+                    except Exception as e:
+                        logging.warning(f"Identity matching failed: {str(e)}")
+
+                face_id = self.store.add_face_with_embedding(
                     photo_id=photo_id,
                     bbox_x=x,
                     bbox_y=y,
                     bbox_w=w,
                     bbox_h=h,
-                    category=category,
                     confidence=conf,
+                    embedding=embedding,
+                    person_id=auto_person_id,
                 )
-                results["objects"].append(object_id)
-        except Exception as e:
-            # Object detection is optional - don't fail if it errors
-            logging.warning(f"Object detection failed for {photo_path}: {e}")
 
-        # =====================================================================
-        # PET DETECTION & EMBEDDING (for pet identity grouping)
-        # Uses original_bgr for cropping to maintain quality
-        # =====================================================================
-        try:
-            # Detect animals using pre-resized image
-            animal_detections = self.object_detector.detect_animals(
-                photo_path, 
-                min_confidence=0.4,
-                image_bgr=ml_image_bgr,
-                scale_factor=ml_scale
-            )
-            
-            if animal_detections:
-                # Use original image for cropping (mejor quality)
-                img = original_bgr
-                img_height, img_width = img.shape[:2]
-                
-                # Collect pets to add to FAISS after all DB commits succeed
-                pets_for_faiss = []
-                
-                for x, y, w, h, species, conf in animal_detections:
-                    # Add padding to crop (20% on each side)
-                    padding = 0.2
-                    pad_x = int(w * padding)
-                    pad_y = int(h * padding)
-                    
-                    crop_x1 = max(0, x - pad_x)
-                    crop_y1 = max(0, y - pad_y)
-                    crop_x2 = min(img_width, x + w + pad_x)
-                    crop_y2 = min(img_height, y + h + pad_y)
-                    
-                    # Crop pet region
-                    pet_crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
-                    
-                    # Skip tiny crops
-                    if pet_crop.shape[0] < 32 or pet_crop.shape[1] < 32:
-                        continue
-                    
-                    # Generate CLIP embedding for pet identity
-                    pet_embedding = self.image_embedder.embed_crop(pet_crop)
-                    
-                    # Skip if embedding failed (zero vector)
-                    if np.allclose(pet_embedding, 0):
-                        continue
-                    
-                    # Store pet detection + embedding atomically in DB
-                    pet_detection_id = self.store.add_pet_detection_with_embedding(
+                faces_for_faiss.append((face_id, embedding))
+                results["faces"].append(face_id)
+
+            for face_id, embedding in faces_for_faiss:
+                self.index.add_vectors("face", embedding.reshape(1, -1), [face_id])
+
+            if auto_assigned_count > 0:
+                logging.info(f"Auto-assigned {auto_assigned_count} faces to known people")
+
+            # =======================================================================
+            # OBJECT DETECTION (optional)
+            # =======================================================================
+            try:
+                object_detections = self.object_detector.detect(
+                    photo_path,
+                    image_bgr=ml_image_bgr,
+                    scale_factor=ml_scale,
+                )
+                for x, y, w, h, category, conf in object_detections:
+                    object_id = self.store.add_object(
                         photo_id=photo_id,
                         bbox_x=x,
                         bbox_y=y,
                         bbox_w=w,
                         bbox_h=h,
-                        species=species,
+                        category=category,
                         confidence=conf,
-                        embedding=pet_embedding,
                     )
-                    
-                    # Queue for FAISS update (only after DB commit succeeded)
-                    pets_for_faiss.append((pet_detection_id, pet_embedding))
-                    results["pets"].append(pet_detection_id)
-                
-                # Add to FAISS index AFTER all DB operations succeed
-                for pet_detection_id, pet_embedding in pets_for_faiss:
-                    self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
-                # Note: FAISS save is deferred to batch level
-                    
-        except Exception as e:
-            logging.warning(f"Pet detection failed for {photo_path}: {e}")
+                    results["objects"].append(object_id)
+            except Exception as e:
+                logging.warning(f"Object detection failed for {photo_path}: {e}")
 
-        # =======================================================================
-        # IMAGE EMBEDDING with pre-decoded PIL image
-        # =======================================================================
-        try:
-            image_embedding = self.image_embedder.embed_pil(ml_image_rgb)
-            self.index.add_vectors("image", image_embedding.reshape(1, -1), [photo_id])
-            # Note: FAISS save is deferred to batch level
-            results["image_embedding_id"] = photo_id
-        except Exception as e:
-            # Image embedding is optional
-            logging.warning(f"Image embedding failed for {photo_path}: {e}")
+            # =====================================================================
+            # PET DETECTION & EMBEDDING (optional)
+            # =====================================================================
+            try:
+                animal_detections = self.object_detector.detect_animals(
+                    photo_path,
+                    min_confidence=0.4,
+                    image_bgr=ml_image_bgr,
+                    scale_factor=ml_scale,
+                )
 
-        # =====================================================================
-        # FUSED SCENE DETECTION with pre-decoded images
-        # (Places365 + CLIP + Florence-2 + YOLO evidence)
-        # =====================================================================
-        results["scenes"] = []
-        try:
-            fused_tags = self._detect_scenes_fused(
-                photo_path, 
-                results.get("objects", []),
-                ml_image_rgb=ml_image_rgb,
-                florence_image_rgb=florence_image
-            )
-            
-            # Store fused tags (deduplicated, capped)
-            stored_tags = set()
-            for tag, confidence, source in fused_tags:
-                if tag not in stored_tags:
-                    self.store.add_scene(
-                        photo_id=photo_id,
-                        scene_label=tag,
-                        confidence=confidence
-                    )
+                if animal_detections:
+                    img = original_bgr
+                    img_height, img_width = img.shape[:2]
+                    pets_for_faiss = []
+
+                    for x, y, w, h, species, conf in animal_detections:
+                        padding = 0.2
+                        pad_x = int(w * padding)
+                        pad_y = int(h * padding)
+
+                        crop_x1 = max(0, x - pad_x)
+                        crop_y1 = max(0, y - pad_y)
+                        crop_x2 = min(img_width, x + w + pad_x)
+                        crop_y2 = min(img_height, y + h + pad_y)
+
+                        pet_crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
+                        if pet_crop.shape[0] < 32 or pet_crop.shape[1] < 32:
+                            continue
+
+                        pet_embedding = self.image_embedder.embed_crop(pet_crop)
+                        if np.allclose(pet_embedding, 0):
+                            continue
+
+                        pet_detection_id = self.store.add_pet_detection_with_embedding(
+                            photo_id=photo_id,
+                            bbox_x=x,
+                            bbox_y=y,
+                            bbox_w=w,
+                            bbox_h=h,
+                            species=species,
+                            confidence=conf,
+                            embedding=pet_embedding,
+                        )
+
+                        pets_for_faiss.append((pet_detection_id, pet_embedding))
+                        results["pets"].append(pet_detection_id)
+
+                    for pet_detection_id, pet_embedding in pets_for_faiss:
+                        self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
+            except Exception as e:
+                logging.warning(f"Pet detection failed for {photo_path}: {e}")
+
+            # =======================================================================
+            # IMAGE EMBEDDING (optional)
+            # =======================================================================
+            try:
+                image_embedding = self.image_embedder.embed_pil(ml_image_rgb)
+                self.index.add_vectors("image", image_embedding.reshape(1, -1), [photo_id])
+                results["image_embedding_id"] = photo_id
+            except Exception as e:
+                logging.warning(f"Image embedding failed for {photo_path}: {e}")
+
+            # =====================================================================
+            # FUSED SCENE DETECTION (optional)
+            # =====================================================================
+            try:
+                fused_tags = self._detect_scenes_fused(
+                    photo_path,
+                    results.get("objects", []),
+                    ml_image_rgb=ml_image_rgb,
+                    florence_image_rgb=florence_image,
+                )
+
+                stored_tags = set()
+                for tag, confidence, source in fused_tags:
+                    if tag in stored_tags:
+                        continue
+                    self.store.add_scene(photo_id=photo_id, scene_label=tag, confidence=confidence)
                     stored_tags.add(tag)
                     results["scenes"].append(tag)
-            
-            logging.info(f"Fused scene tags for {photo_path}: {results['scenes']}")
 
-            # Store Florence tags separately for precise object UI fallback
-            florence_prefix = "florence:"
-            stored_florence_tags = set()
-            for tag, confidence, source in fused_tags:
-                if source != "florence":
-                    continue
-                prefixed_tag = f"{florence_prefix}{tag}"
-                if prefixed_tag in stored_florence_tags:
-                    continue
-                self.store.add_scene(
-                    photo_id=photo_id,
-                    scene_label=prefixed_tag,
-                    confidence=confidence
-                )
-                stored_florence_tags.add(prefixed_tag)
-            
+                # Store Florence tags separately for precise object UI fallback
+                florence_prefix = "florence:"
+                stored_florence_tags = set()
+                for tag, confidence, source in fused_tags:
+                    if source != "florence":
+                        continue
+                    prefixed_tag = f"{florence_prefix}{tag}"
+                    if prefixed_tag in stored_florence_tags:
+                        continue
+                    self.store.add_scene(photo_id=photo_id, scene_label=prefixed_tag, confidence=confidence)
+                    stored_florence_tags.add(prefixed_tag)
+            except Exception as e:
+                logging.warning(f"Scene detection failed for {photo_path}: {e}")
+                results["scenes"] = []
+
+            # Mark processed (even if optional detectors failed) to prevent rescans
+            try:
+                self.store.mark_photo_ml_processed(photo_id)
+            except Exception:
+                pass
+            results["status"] = "processed"
+            return results
         except Exception as e:
-            logging.warning(f"Scene detection failed for {photo_path}: {e}")
-            results["scenes"] = []
-
-        # =======================================================================
-        # CLEANUP: Clear image from cache to free memory
-        # =======================================================================
-        image_cache.clear(photo_path)
-
-        return results
+            logging.error(f"Fatal ML processing error for {photo_path}: {e}", exc_info=True)
+            try:
+                self.store.mark_photo_ml_error(photo_id, str(e))
+            except Exception:
+                pass
+            return {"status": "error", "reason": str(e), **results}
+        finally:
+            try:
+                image_cache.clear(photo_path)
+            except Exception:
+                pass
     
     def _detect_scenes_fused(
         self, 

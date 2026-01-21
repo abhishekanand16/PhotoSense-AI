@@ -1,11 +1,12 @@
 import asyncio
 import json
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterator, Set
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
@@ -172,7 +173,13 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         else:
             image_paths = [str(p) for p in folder.iterdir() if p.suffix.lower() in image_extensions]
 
-        total = len(image_paths)
+        # Pass A: count images (streaming, no list allocation)
+        total = 0
+        for _ in _iter_image_paths(folder, recursive, image_extensions):
+            total += 1
+            if total % 5000 == 0:
+                await asyncio.sleep(0)
+
         _update_job(job_id, message=f"Found {total} images")
         _update_global_state(total_photos=total, processed_photos=0, message=f"Found {total} images", progress_percent=0)
 
@@ -184,13 +191,11 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         _update_job(job_id, phase="import")
         imported_photos = []
         
-        for idx, image_path in enumerate(image_paths):
+        for idx, image_path in enumerate(_iter_image_paths(folder, recursive, image_extensions)):
             try:
                 result = await pipeline.import_photo(image_path)
                 if result.get("status") in ["imported", "exists"]:
-                    photo_id = result.get("photo_id")
-                    if photo_id:
-                        imported_photos.append((photo_id, image_path))
+                    imported_count += 1
             except Exception as e:
                 logging.error(f"Failed to import {image_path}: {str(e)}")
 
@@ -220,7 +225,7 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             
             for photo_id, image_path in batch:
                 try:
-                    result = await pipeline.process_photo_ml(photo_id, image_path)
+                    result = await pipeline.process_photo_ml(photo_id, path)
                     processed += 1
                     faces_found = len(result.get("faces", []))
                     objects_found = len(result.get("objects", []))
@@ -251,7 +256,7 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         
         clusters = cluster_result.get("clusters", 0)
         faces_clustered = cluster_result.get("faces_clustered", 0)
-        final_msg = f"Completed: {len(imported_photos)} photos, {total_faces} faces, {clusters} people found"
+        final_msg = f"Completed: {processed} photos analyzed, {total_faces} faces, {clusters} people found"
         _update_job(
             job_id,
             status="completed",
