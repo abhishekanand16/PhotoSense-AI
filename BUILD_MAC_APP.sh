@@ -7,9 +7,7 @@ set -e
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
-echo "║                                                                ║"
 echo "║              PhotoSense-AI Mac App Builder                     ║"
-echo "║                                                                ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -27,155 +25,108 @@ echo "Building for: $TARGET"
 
 # Check prerequisites
 echo ""
-echo "[1/6] Checking prerequisites..."
+echo "[1/7] Checking prerequisites..."
 
-if ! command -v python3 &> /dev/null; then
-    echo "ERROR: Python 3 is required. Install with: brew install python"
-    exit 1
-fi
-
-if ! command -v node &> /dev/null; then
-    echo "ERROR: Node.js is required. Install with: brew install node"
-    exit 1
-fi
-
-if ! command -v cargo &> /dev/null; then
-    echo "ERROR: Rust is required. Install from: https://rustup.rs"
-    exit 1
-fi
+command -v python3 >/dev/null || { echo "ERROR: Python 3 required. brew install python"; exit 1; }
+command -v node >/dev/null || { echo "ERROR: Node.js required. brew install node"; exit 1; }
+command -v cargo >/dev/null || { echo "ERROR: Rust required. https://rustup.rs"; exit 1; }
 
 echo "  ✓ Python: $(python3 --version)"
-echo "  ✓ Node: $(node --version)"
+echo "  ✓ Node: $(node --version)"  
 echo "  ✓ Rust: $(rustc --version)"
 
-# Install create-dmg if needed
-if ! command -v create-dmg &> /dev/null; then
-    echo "  Installing create-dmg..."
-    brew install create-dmg
-fi
-echo "  ✓ create-dmg installed"
+command -v create-dmg >/dev/null || { echo "  Installing create-dmg..."; brew install create-dmg; }
+echo "  ✓ create-dmg"
 
-# Step 2: Setup Python environment and build backend
+# Step 2: Python environment
 echo ""
-echo "[2/6] Setting up Python environment..."
+echo "[2/7] Setting up Python environment..."
 
 VENV_DIR="$PROJECT_ROOT/.build-venv"
-if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-fi
+[ ! -d "$VENV_DIR" ] && python3 -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 
 pip install --upgrade pip -q
 pip install pyinstaller -q
-echo "  Installing Python dependencies (this takes a few minutes first time)..."
+echo "  Installing dependencies (takes a few minutes first time)..."
 pip install -r "$PROJECT_ROOT/requirements.txt" -q
+echo "  ✓ Python ready"
 
-echo "  ✓ Python environment ready"
-
-# Step 3: Build Python backend
+# Step 3: Build backend
 echo ""
-echo "[3/6] Building Python backend..."
+echo "[3/7] Building Python backend..."
 
 cd "$PROJECT_ROOT/packaging/backend"
 rm -rf build dist
-
-pyinstaller photosense_backend.spec --noconfirm 2>&1 | grep -E "(Building|INFO|ERROR|WARNING)" | head -20
+pyinstaller photosense_backend.spec --noconfirm 2>&1 | grep -E "(Building|ERROR)" | head -10
 
 BACKEND_DIR="$PROJECT_ROOT/packaging/backend/dist/photosense-backend"
-if [ ! -f "$BACKEND_DIR/photosense-backend" ]; then
-    echo "ERROR: Backend build failed - executable not found"
-    exit 1
-fi
-echo "  ✓ Backend built successfully"
+[ ! -f "$BACKEND_DIR/photosense-backend" ] && { echo "ERROR: Backend build failed"; exit 1; }
+echo "  ✓ Backend built"
 
-# Step 4: Copy backend to Tauri binaries location
+# Step 4: Setup Tauri binaries  
 echo ""
-echo "[4/6] Preparing backend resources..."
+echo "[4/7] Setting up Tauri sidecar..."
 
-TAURI_DIR="$PROJECT_ROOT/apps/desktop/src-tauri"
-RESOURCES_DIR="$TAURI_DIR/resources/backend"
+BINARIES_DIR="$PROJECT_ROOT/apps/desktop/src-tauri/binaries"
+rm -rf "$BINARIES_DIR"
+mkdir -p "$BINARIES_DIR"
 
-# Clean old binaries folder if it exists (legacy)
-if [ -d "$TAURI_DIR/binaries" ]; then
-    echo "  Removing old binaries folder..."
-    rm -rf "$TAURI_DIR/binaries" 2>/dev/null || sudo rm -rf "$TAURI_DIR/binaries" 2>/dev/null || true
-fi
+# Copy the executable with target triple name
+cp "$BACKEND_DIR/photosense-backend" "$BINARIES_DIR/photosense-backend-$TARGET"
+chmod +x "$BINARIES_DIR/photosense-backend-$TARGET"
 
-# Clean and create resources directory
-# Fix permissions if owned by root
-if [ -d "$RESOURCES_DIR" ]; then
-    if [ ! -w "$RESOURCES_DIR" ]; then
-        echo "  Fixing permissions on resources directory..."
-        sudo rm -rf "$RESOURCES_DIR" 2>/dev/null || {
-            echo "ERROR: Cannot remove resources directory. Run manually:"
-            echo "  sudo rm -rf $RESOURCES_DIR"
-            exit 1
-        }
-    else
-        rm -rf "$RESOURCES_DIR"
-    fi
-fi
-mkdir -p "$RESOURCES_DIR"
+# Copy _internal folder (required for PyInstaller)
+cp -R "$BACKEND_DIR/_internal" "$BINARIES_DIR/_internal"
 
-# Copy entire PyInstaller output next to the executable
-cp -R "$BACKEND_DIR/"* "$RESOURCES_DIR/"
+echo "  ✓ Sidecar ready"
 
-# Ensure the backend executable is runnable
-chmod +x "$RESOURCES_DIR/photosense-backend"
-
-echo "  ✓ Backend resources prepared"
-echo "  Files in resources/backend/:"
-ls "$RESOURCES_DIR" | head -5
-echo "  ... and $(ls "$RESOURCES_DIR" | wc -l | tr -d ' ') total files"
-
-# Step 5: Build Tauri app
+# Step 5: Build Tauri
 echo ""
-echo "[5/6] Building Tauri app (this takes 5-10 minutes)..."
+echo "[5/7] Building Tauri app..."
 
 cd "$PROJECT_ROOT/apps/desktop"
 npm install --silent 2>/dev/null
-
-# Clean dist directory to avoid Vite build errors
-echo "  Cleaning dist directory..."
-if [ -d "dist" ]; then
-    # Try to fix permissions and remove
-    chmod -R u+w dist 2>/dev/null || true
-    rm -rf dist 2>/dev/null || {
-        echo "  Warning: Could not remove dist directory (may have permission issues)"
-        echo "  Moving dist to dist.old and creating new one..."
-        mv dist dist.old 2>/dev/null || {
-            echo "  ERROR: Cannot clean dist directory. Please run manually:"
-            echo "    sudo rm -rf apps/desktop/dist"
-            echo "  Then run this script again."
-            exit 1
-        }
-    }
-fi
-mkdir -p dist
-
-# Build the Tauri app
-npm run tauri build 2>&1 | grep -E "(Compiling|Finished|Bundling|Error|error)" | head -30
+npm run tauri build 2>&1 | grep -E "(Compiling|Finished|Bundling|error\[)" | head -20
 
 # Find the built app
-APP_PATH=$(find "$TAURI_DIR/target/release/bundle/macos" -name "*.app" -type d 2>/dev/null | head -1)
-if [ -z "$APP_PATH" ]; then
-    echo "ERROR: Tauri build failed - no .app found"
-    echo "Check the output above for errors"
-    exit 1
-fi
+APP_PATH=$(find "$PROJECT_ROOT/apps/desktop/src-tauri/target/release/bundle/macos" -name "*.app" -type d 2>/dev/null | head -1)
+[ -z "$APP_PATH" ] && { echo "ERROR: Tauri build failed"; exit 1; }
 echo "  ✓ App built: $(basename "$APP_PATH")"
 
-# Step 6: Create DMG
+# Step 6: Fix the app bundle - copy _internal to MacOS folder
 echo ""
-echo "[6/6] Creating DMG installer..."
+echo "[6/7] Fixing app bundle for PyInstaller..."
+
+APP_MACOS="$APP_PATH/Contents/MacOS"
+APP_RESOURCES="$APP_PATH/Contents/Resources"
+
+# The _internal folder needs to be next to the executable in MacOS/
+if [ -d "$APP_RESOURCES/_internal" ]; then
+    mv "$APP_RESOURCES/_internal" "$APP_MACOS/_internal"
+    echo "  ✓ Moved _internal to MacOS/"
+elif [ -d "$APP_RESOURCES/binaries/_internal" ]; then
+    mv "$APP_RESOURCES/binaries/_internal" "$APP_MACOS/_internal"
+    echo "  ✓ Moved _internal from binaries/ to MacOS/"
+fi
+
+# Verify the backend can find its files
+if [ -d "$APP_MACOS/_internal" ]; then
+    echo "  ✓ _internal folder in correct location"
+else
+    echo "  WARNING: _internal folder not found, backend may not work"
+fi
+
+# Step 7: Create DMG
+echo ""
+echo "[7/7] Creating DMG..."
 
 OUTPUT_DIR="$PROJECT_ROOT/dist"
 mkdir -p "$OUTPUT_DIR"
 DMG_PATH="$OUTPUT_DIR/PhotoSense-AI.dmg"
 rm -f "$DMG_PATH"
 
-# Try create-dmg first, fall back to hdiutil
-if create-dmg \
+create-dmg \
     --volname "PhotoSense-AI" \
     --window-pos 200 120 \
     --window-size 600 400 \
@@ -185,45 +136,27 @@ if create-dmg \
     --app-drop-link 450 185 \
     --no-internet-enable \
     "$DMG_PATH" \
-    "$APP_PATH" 2>/dev/null; then
-    echo "  ✓ DMG created with create-dmg"
-else
-    echo "  Using hdiutil fallback..."
-    hdiutil create -volname "PhotoSense-AI" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
-    echo "  ✓ DMG created with hdiutil"
-fi
+    "$APP_PATH" 2>/dev/null || hdiutil create -volname "PhotoSense-AI" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
 
-# Cleanup build artifacts (keep the DMG)
+# Cleanup
 echo ""
-echo "Cleaning up build artifacts..."
+echo "Cleaning up..."
 rm -rf "$PROJECT_ROOT/packaging/backend/build"
-rm -rf "$PROJECT_ROOT/packaging/backend/dist"
-rm -rf "$RESOURCES_DIR"
+rm -rf "$PROJECT_ROOT/packaging/backend/dist"  
+rm -rf "$BINARIES_DIR"
 deactivate 2>/dev/null || true
 
-# Get DMG size
 DMG_SIZE=$(du -h "$DMG_PATH" | cut -f1)
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
-echo "║                                                                ║"
 echo "║                    BUILD COMPLETE!                             ║"
-echo "║                                                                ║"
 echo "╠════════════════════════════════════════════════════════════════╣"
+echo "║  📦 dist/PhotoSense-AI.dmg ($DMG_SIZE)                         ║"
 echo "║                                                                ║"
-echo "║   📦 Output: dist/PhotoSense-AI.dmg ($DMG_SIZE)                ║"
-echo "║                                                                ║"
-echo "║   To install:                                                  ║"
-echo "║   1. Double-click PhotoSense-AI.dmg                            ║"
-echo "║   2. Drag PhotoSense-AI to Applications                        ║"
-echo "║   3. Launch from Applications folder                           ║"
-echo "║                                                                ║"
-echo "║   First launch note:                                           ║"
-echo "║   If macOS says 'damaged', run in Terminal:                    ║"
-echo "║   xattr -cr /Applications/PhotoSense-AI.app                    ║"
-echo "║                                                                ║"
+echo "║  Install: Drag to Applications                                 ║"
+echo "║  If 'damaged' error: xattr -cr /Applications/PhotoSense-AI.app ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Open the folder containing the DMG
 open "$OUTPUT_DIR"

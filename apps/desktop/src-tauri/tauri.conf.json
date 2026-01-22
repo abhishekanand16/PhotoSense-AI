@@ -45,7 +45,8 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "resources": ["resources/backend/**"],
+      "externalBin": ["photosense-backend"],
+      "resources": ["binaries/_internal/**/*"],
       "macOS": {
         "minimumSystemVersion": "10.15",
         "exceptionDomain": "",

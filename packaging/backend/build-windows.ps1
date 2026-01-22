@@ -1,6 +1,10 @@
 #
 # Build PhotoSense-AI Backend for Windows
+# Creates a standalone executable that can run without Python installed
 #
+
+# Stop on terminating errors, but continue on non-terminating (pip warnings)
+$ErrorActionPreference = "Stop"
 
 $ScriptDir = $PSScriptRoot
 $ProjectRoot = (Get-Item "$ScriptDir\..\..").FullName

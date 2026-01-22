@@ -285,9 +285,10 @@ npm test
 ## Security & Privacy
 
 - **100% Local Processing**: All ML models run on your machine
-- **No Cloud Services**: No data is sent to external servers
-- **Local Storage**: All data stored in project directory
+- **No Cloud Services**: No photo data is sent to external servers
+- **Local Storage**: All data stored in the app data directory
 - **No Telemetry**: No tracking or analytics
+- **Optional Geocoding**: Location names (city, country) can be resolved using OpenStreetMap's Nominatim API. This is optional and requires network access. If disabled or offline, GPS coordinates are still stored locally but without place names. The app works fully offline without geocoding.
 
 ## Contributing
 

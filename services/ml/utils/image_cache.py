@@ -3,13 +3,14 @@ import numpy as np
 from PIL import Image
 from typing import Dict, Optional, Tuple
 import logging
+import threading
 
 from services.config import IMAGE_CACHE_SIZES
 
 
 class ImageCache:
     """
-    Thread-local cache for decoded images during ML processing.
+    Thread-safe cache for decoded images during ML processing.
     Ensures each image is decoded exactly once per photo.
     """
     
@@ -19,10 +20,12 @@ class ImageCache:
     
     def __init__(self):
         self._cache: Dict[str, Dict] = {}
+        self._lock = threading.Lock()
     
     def decode_image(self, image_path: str) -> Optional[Dict]:
         """
         Decode an image once and cache it with pre-resized versions.
+        Thread-safe: uses lock to prevent race conditions during concurrent access.
         
         Returns dict with:
         - 'original_bgr': Original resolution as numpy BGR (for cropping)
@@ -34,9 +37,12 @@ class ImageCache:
         - 'original_size': (width, height) of original
         - 'scale_factors': dict of scale factors for bbox mapping
         """
-        if image_path in self._cache:
-            return self._cache[image_path]
+        # Fast path: check cache without lock first (safe for reads)
+        with self._lock:
+            if image_path in self._cache:
+                return self._cache[image_path]
         
+        # Decode outside of lock (expensive operation, allow parallelism)
         try:
             # Single decode using cv2 (fastest for numpy)
             original_bgr = cv2.imread(image_path)
@@ -81,7 +87,15 @@ class ImageCache:
                 'scale_factors': scale_factors,
             }
             
-            self._cache[image_path] = cached
+            # Store in cache with lock
+            with self._lock:
+                # Double-check: another thread may have cached it while we were decoding
+                if image_path not in self._cache:
+                    self._cache[image_path] = cached
+                else:
+                    # Use the already-cached version
+                    cached = self._cache[image_path]
+            
             return cached
             
         except Exception as e:
@@ -129,11 +143,13 @@ class ImageCache:
         """
         Clear cache for a specific image or all images.
         Call after processing each photo to free memory.
+        Thread-safe.
         """
-        if image_path:
-            self._cache.pop(image_path, None)
-        else:
-            self._cache.clear()
+        with self._lock:
+            if image_path:
+                self._cache.pop(image_path, None)
+            else:
+                self._cache.clear()
     
     def get_original_bgr(self, image_path: str) -> Optional[np.ndarray]:
         """Get original BGR image for direct cropping operations."""
@@ -170,18 +186,23 @@ class ImageCache:
 
 # Global singleton for the current processing batch
 _image_cache = None
+_singleton_lock = threading.Lock()
 
 
 def get_image_cache() -> ImageCache:
-    """Get the global image cache singleton."""
+    """Get the global image cache singleton. Thread-safe initialization."""
     global _image_cache
     if _image_cache is None:
-        _image_cache = ImageCache()
+        with _singleton_lock:
+            # Double-check locking pattern
+            if _image_cache is None:
+                _image_cache = ImageCache()
     return _image_cache
 
 
 def clear_image_cache():
-    """Clear the global image cache."""
+    """Clear the global image cache. Thread-safe."""
     global _image_cache
-    if _image_cache is not None:
-        _image_cache.clear()
+    with _singleton_lock:
+        if _image_cache is not None:
+            _image_cache.clear()
