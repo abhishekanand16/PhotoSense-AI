@@ -12,17 +12,12 @@ tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
 tauri = { version = "1.6", features = [
-    "shell-sidecar",
-    "shell-open",
-    "dialog-open",
-    "dialog-message",
-    "dialog-ask",
-    "fs-read-file",
-    "fs-read-dir",
-    "path-all",
+    "process-all",
     "protocol-asset",
-    "process-exit",
-    "process-relaunch",
+    "fs-all",
+    "path-all",
+    "dialog-all",
+    "shell-open",
     "window-close",
     "window-hide",
     "window-show",
@@ -30,7 +25,7 @@ tauri = { version = "1.6", features = [
     "window-minimize",
     "window-unmaximize",
     "window-unminimize",
-    "window-start-dragging",
+    "window-start-dragging"
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

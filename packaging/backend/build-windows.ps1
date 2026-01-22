@@ -11,6 +11,22 @@ $ProjectRoot = (Get-Item "$ScriptDir\..\..").FullName
 $OutputDir = "$ScriptDir\..\dist\backend"
 $PortableDir = "$ScriptDir\.python-portable"
 
+# Enable Windows long paths when possible
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+try {
+    $longPaths = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name LongPathsEnabled -ErrorAction SilentlyContinue).LongPathsEnabled
+    if ($longPaths -ne 1) {
+        if ($isAdmin) {
+            Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name LongPathsEnabled -Value 1 -Force
+            Write-Host "  ✓ Enabled Windows long paths" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: Long paths are disabled. Run as Admin to enable." -ForegroundColor Yellow
+        }
+    }
+} catch {
+    Write-Host "  WARNING: Could not read/set LongPathsEnabled." -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "============================================================"
 Write-Host "  PhotoSense-AI Backend Build for Windows"
@@ -120,7 +136,7 @@ Write-Host "  Installing numpy..."
 
 # Install core dependencies that others need
 Write-Host "  Installing core packages (torch, opencv, pillow)..."
-& $pythonExe -m pip install torch torchvision --no-warn-script-location -q 2>$null
+& $pythonExe -m pip install torch torchvision --no-warn-script-location
 & $pythonExe -m pip install opencv-python pillow --no-warn-script-location -q 2>$null
 
 # Install onnxruntime before insightface

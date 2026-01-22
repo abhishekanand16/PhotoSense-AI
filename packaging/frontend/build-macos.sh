@@ -61,35 +61,19 @@ cp "$SCRIPT_DIR/build.rs" "$BUILD_DIR/src-tauri/"
 mkdir -p "$BUILD_DIR/src-tauri/src"
 cp "$SCRIPT_DIR/src/main.rs" "$BUILD_DIR/src-tauri/src/"
 
-# Copy backend sidecar to binaries folder
+# Copy backend bundle to resources
 echo ""
-echo "Copying backend sidecar..."
-SIDECAR_DIR="$BUILD_DIR/src-tauri/binaries"
-mkdir -p "$SIDECAR_DIR"
+echo "Copying backend resources..."
+RESOURCES_DIR="$BUILD_DIR/src-tauri/resources/backend"
+rm -rf "$RESOURCES_DIR"
+mkdir -p "$RESOURCES_DIR"
 
-# Determine target triple
-ARCH=$(uname -m)
-if [ "$ARCH" = "arm64" ]; then
-    TARGET_TRIPLE="aarch64-apple-darwin"
-else
-    TARGET_TRIPLE="x86_64-apple-darwin"
-fi
+# Copy the entire PyInstaller output
+cp -r "$BACKEND_DIR"/* "$RESOURCES_DIR/"
+chmod +x "$RESOURCES_DIR/photosense-backend"
 
-# For Tauri sidecar with PyInstaller folder bundles:
-# Tauri expects: binaries/photosense-backend-{target-triple}
-# PyInstaller creates a folder with executable + dependencies
-#
-# We copy everything flat to binaries/ and rename the main executable
-
-# Copy the entire bundle contents directly to binaries
-cp -r "$BACKEND_DIR"/* "$SIDECAR_DIR/"
-
-# Rename the main executable with the target triple
-mv "$SIDECAR_DIR/photosense-backend" "$SIDECAR_DIR/photosense-backend-$TARGET_TRIPLE"
-chmod +x "$SIDECAR_DIR/photosense-backend-$TARGET_TRIPLE"
-
-echo "Sidecar executable: $SIDECAR_DIR/photosense-backend-$TARGET_TRIPLE"
-echo "Dependencies in: $SIDECAR_DIR/"
+echo "Backend executable: $RESOURCES_DIR/photosense-backend"
+echo "Dependencies in: $RESOURCES_DIR/"
 
 # Install npm dependencies
 echo ""

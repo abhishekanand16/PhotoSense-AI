@@ -1,25 +1,45 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use tauri::Manager;
 
 struct BackendState {
-    child: Option<tauri::api::process::CommandChild>,
+    child: Option<std::process::Child>,
 }
 
-/// Check if backend is responding on port 8000
+fn log_path(app: &tauri::AppHandle) -> PathBuf {
+    let base = app
+        .path_resolver()
+        .app_data_dir()
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("logs")
+}
+
+fn log_line(app: &tauri::AppHandle, message: &str) {
+    let log_dir = log_path(app);
+    if fs::create_dir_all(&log_dir).is_ok() {
+        let log_file = log_dir.join("backend.log");
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file) {
+            let _ = writeln!(file, "{}", message);
+        }
+    }
+}
+
 fn is_backend_ready() -> bool {
-    std::net::TcpStream::connect_timeout(
-        &"127.0.0.1:8000".parse().unwrap(),
-        Duration::from_secs(1),
-    )
-    .is_ok()
+    let addr: std::net::SocketAddr = match "127.0.0.1:8000".parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
 }
 
-/// Wait for backend to become ready
 fn wait_for_backend(max_seconds: u32) -> bool {
     for i in 1..=max_seconds * 2 {
         if is_backend_ready() {
@@ -34,33 +54,70 @@ fn wait_for_backend(max_seconds: u32) -> bool {
     false
 }
 
-/// Spawn the Python backend sidecar
-fn start_backend() -> Result<tauri::api::process::CommandChild, String> {
-    use tauri::api::process::{Command, CommandEvent};
-
+fn start_backend(app: &tauri::AppHandle) -> Result<std::process::Child, String> {
     println!("[PhotoSense] Starting backend...");
+    log_line(app, "[PhotoSense] Starting backend...");
 
-    let cmd = Command::new_sidecar("photosense-backend")
-        .map_err(|e| format!("Sidecar not found: {}", e))?;
+    #[cfg(target_os = "windows")]
+    let backend_name = "backend/photosense-backend.exe";
+    #[cfg(not(target_os = "windows"))]
+    let backend_name = "backend/photosense-backend";
 
-    let (mut rx, child) = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn backend: {}", e))?;
+    let backend_path = app
+        .path_resolver()
+        .resolve_resource(backend_name)
+        .ok_or_else(|| format!("Backend resource not found: {}", backend_name))?;
 
-    // Log output in background
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(line) => println!("[Backend] {}", line),
-                CommandEvent::Stderr(line) => eprintln!("[Backend] {}", line),
-                CommandEvent::Error(e) => eprintln!("[Backend Error] {}", e),
-                CommandEvent::Terminated(t) => {
-                    println!("[Backend] Process exited with code: {:?}", t.code)
-                }
-                _ => {}
-            }
+    if !backend_path.exists() {
+        return Err(format!(
+            "Backend executable does not exist at: {}",
+            backend_path.display()
+        ));
+    }
+
+    let backend_dir = match backend_path.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return Err(format!("Backend directory not found for: {}", backend_path.display())),
+    };
+
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&backend_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = fs::set_permissions(&backend_path, perms);
         }
-    });
+    }
+
+    log_line(app, &format!("[PhotoSense] Backend path: {}", backend_path.display()));
+    log_line(app, &format!("[PhotoSense] Backend cwd: {}", backend_dir.display()));
+
+    let log_dir = log_path(app);
+    let _ = fs::create_dir_all(&log_dir);
+    let log_file = log_dir.join("backend.log");
+    
+    let data_dir_str = log_dir
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| backend_dir.to_string_lossy().to_string());
+    
+    let log_handle = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .map_err(|e| format!("Failed to open backend log file: {e}"))?;
+
+    let log_handle_clone = log_handle.try_clone()
+        .map_err(|e| format!("Failed to clone log handle: {e}"))?;
+
+    let child = Command::new(&backend_path)
+        .current_dir(&backend_dir)
+        .env("PHOTOSENSE_DATA_DIR", data_dir_str)
+        .stdout(Stdio::from(log_handle_clone))
+        .stderr(Stdio::from(log_handle))
+        .spawn()
+        .map_err(|e| format!("Failed to spawn backend: {e}"))?;
 
     Ok(child)
 }
@@ -78,14 +135,10 @@ fn main() {
             println!("  PhotoSense-AI Starting");
             println!("================================================");
 
-            // Start the backend sidecar
-            match start_backend() {
+            match start_backend(&app.handle()) {
                 Ok(child) => {
-                    // Store the child process handle
                     let state = app.state::<Mutex<BackendState>>();
                     state.lock().unwrap().child = Some(child);
-
-                    // Wait for backend to be ready (max 30 seconds)
                     if wait_for_backend(30) {
                         println!("================================================");
                         println!("  PhotoSense-AI Ready!");
@@ -93,6 +146,7 @@ fn main() {
                         println!("================================================");
                     } else {
                         eprintln!("[Warning] Backend may still be starting...");
+                        log_line(&app.handle(), "[Warning] Backend may still be starting...");
                     }
                 }
                 Err(e) => {
@@ -102,16 +156,20 @@ fn main() {
                     eprintln!("  For development, run manually:");
                     eprintln!("  python run_api.py");
                     eprintln!("================================================");
+                    log_line(&app.handle(), &format!("[Error] Backend failed to start: {e}"));
                 }
             }
-
             Ok(())
         })
         .on_window_event(|event| {
-            // Kill backend when app window closes
             if let tauri::WindowEvent::CloseRequested { .. } = event.event() {
-                let state = event.window().app_handle().state::<Mutex<BackendState>>();
-                if let Some(child) = state.lock().unwrap().child.take() {
+                let app_handle = event.window().app_handle();
+                let state = app_handle.state::<Mutex<BackendState>>();
+                let child_opt = {
+                    let mut state_guard = state.lock().unwrap();
+                    state_guard.child.take()
+                };
+                if let Some(mut child) = child_opt {
                     println!("[PhotoSense] Stopping backend...");
                     let _ = child.kill();
                 }
