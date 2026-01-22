@@ -16,15 +16,7 @@
       "shell": {
         "all": false,
         "open": true,
-        "sidecar": true,
-        "execute": false,
-        "scope": [
-          {
-            "name": "photosense-backend",
-            "sidecar": true,
-            "args": true
-          }
-        ]
+        "execute": false
       },
       "dialog": {
         "all": false,
@@ -61,9 +53,7 @@
         ]
       },
       "process": {
-        "all": false,
-        "exit": true,
-        "relaunch": true
+        "all": true
       },
       "window": {
         "all": false,
@@ -81,8 +71,8 @@
       "active": true,
       "category": "Photography",
       "copyright": "Copyright © 2024 PhotoSense-AI",
-      "externalBin": [
-        "photosense-backend"
+      "resources": [
+        "resources/backend/**"
       ],
       "icon": [
         "icons/32x32.png",

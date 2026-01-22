@@ -20,6 +20,7 @@ echo.
 
 set SCRIPT_DIR=%~dp0
 set DIST_DIR=%SCRIPT_DIR%dist
+set FINAL_INSTALLER=%DIST_DIR%\PhotoSense-AI-Setup.exe
 
 REM Create dist directory
 if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
@@ -62,16 +63,16 @@ echo ----------------------------------------------------------------
 echo.
 
 for %%f in ("%DIST_DIR%\frontend\*setup*.exe") do (
-    copy "%%f" "%DIST_DIR%\PhotoSense-AI-1.0.0-windows-setup.exe" >nul 2>&1
+    copy "%%f" "%FINAL_INSTALLER%" >nul 2>&1
 )
 
-if exist "%DIST_DIR%\PhotoSense-AI-1.0.0-windows-setup.exe" (
+if exist "%FINAL_INSTALLER%" (
     echo.
     echo ================================================================
     echo                     BUILD COMPLETE
     echo ================================================================
     echo.
-    echo   Installer: dist\PhotoSense-AI-1.0.0-windows-setup.exe
+    echo   Installer: dist\PhotoSense-AI-Setup.exe
     echo.
     echo   To install:
     echo   1. Double-click the installer

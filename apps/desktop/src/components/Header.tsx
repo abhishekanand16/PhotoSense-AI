@@ -23,7 +23,7 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
   const { theme, toggleTheme } = useTheme();
   const [searchQuery, setSearchQuery] = useState("");
-  const [, setIsBackendConnected] = useState(false);
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   
   const [globalStatus, setGlobalStatus] = useState<GlobalScanStatus>({
@@ -205,7 +205,14 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
         <div className="flex items-center gap-4">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-3 px-4 py-2 bg-light-bg dark:bg-dark-bg/50 border border-light-border dark:border-dark-border rounded-xl min-w-[180px]">
-              {globalStatus.status === "scanning" || globalStatus.status === "indexing" ? (
+              {!isBackendConnected ? (
+                <>
+                  <Circle size={8} className="fill-red-500 text-red-500 animate-pulse" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-red-500">
+                    Disconnected
+                  </span>
+                </>
+              ) : globalStatus.status === "scanning" || globalStatus.status === "indexing" ? (
                 <>
                   <Loader2 size={16} className="text-brand-primary animate-spin flex-shrink-0" />
                   <div className="flex flex-col min-w-0">

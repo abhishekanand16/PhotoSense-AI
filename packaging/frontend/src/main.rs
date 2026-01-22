@@ -8,6 +8,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 use std::time::Duration;
@@ -27,9 +31,7 @@ static CLEANUP_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Holds the backend process handle for lifecycle management
 struct BackendState {
-    child: Option<CommandChild>,
-    port: u16,
-    started: bool,
+    child: Option<std::process::Child>,
 }
 
 /// Kill backend process by PID (used for cleanup on crash/force-quit)
@@ -80,34 +82,29 @@ fn is_port_open(host: &str, port: u16) -> bool {
     ).is_ok()
 }
 
-/// Check if the backend health endpoint responds
-fn check_backend_health_sync(port: u16) -> bool {
-    let url = format!("http://{}:{}/health", BACKEND_HOST, port);
-    match ureq::get(&url)
-        .timeout(Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS))
-        .call()
-    {
-        Ok(response) => response.status() == 200,
-        Err(_) => false,
+fn log_line(app: &tauri::AppHandle, message: &str) {
+    let log_dir = log_path(app);
+    if fs::create_dir_all(&log_dir).is_ok() {
+        let log_file = log_dir.join("backend.log");
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file) {
+            let _ = writeln!(file, "{message}");
+        }
     }
 }
 
-/// Wait for backend to become healthy (blocking)
-fn wait_for_backend_sync(port: u16, max_attempts: u32) -> bool {
-    for attempt in 1..=max_attempts {
-        // First check if port is open (fast)
-        if is_port_open(BACKEND_HOST, port) {
-            // Then verify health endpoint (slower but confirms it's our backend)
-            if check_backend_health_sync(port) {
-                println!("[PhotoSense] Backend is healthy after {} attempts", attempt);
-                return true;
-            }
+fn is_backend_ready() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:8000".parse().unwrap(),
+        Duration::from_secs(1),
+    )
+    .is_ok()
+}
+
+fn wait_for_backend(max_seconds: u32) -> bool {
+    for i in 1..=max_seconds * 2 {
+        if is_backend_ready() {
+            return true;
         }
-        
-        if attempt % 10 == 0 {
-            println!("[PhotoSense] Still waiting for backend... attempt {}/{}", attempt, max_attempts);
-        }
-        
         thread::sleep(Duration::from_millis(500));
     }
     false
@@ -172,30 +169,40 @@ fn spawn_backend() -> Result<(CommandChild, u16), String> {
     Ok((child, BACKEND_PORT))
 }
 
-/// Tauri command: Get backend status
-#[tauri::command]
-fn get_backend_status(state: State<'_, Mutex<BackendState>>) -> Result<String, String> {
-    let (port, started) = {
-        let state_guard = state.lock().map_err(|e| e.to_string())?;
-        (state_guard.port, state_guard.started)
-    };
-    
-    if !started {
-        return Err("Backend not started".to_string());
-    }
-    
-    if check_backend_health_sync(port) {
-        Ok(format!("Backend running on port {}", port))
-    } else {
-        Err("Backend not responding".to_string())
-    }
+    let backend_path = app
+        .path_resolver()
+        .resolve_resource("backend/photosense-backend")
+        .ok_or("Backend resource not found: backend/photosense-backend")?;
+
+    let backend_dir = backend_path
+        .parent()
+        .ok_or("Backend directory not found")?;
+
+    log_line(
+        app,
+        &format!("[PhotoSense] Backend path: {}", backend_path.display()),
+    );
+
+    let log_dir = log_path(app);
+    let _ = fs::create_dir_all(&log_dir);
+    let log_file = log_dir.join("backend.log");
+    let log_handle = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .map_err(|e| format!("Failed to open backend log file: {e}"))?;
+
+    Command::new(&backend_path)
+        .current_dir(backend_dir)
+        .stdout(Stdio::from(log_handle.try_clone().map_err(|e| e.to_string())?))
+        .stderr(Stdio::from(log_handle))
+        .spawn()
+        .map_err(|e| format!("Failed to spawn backend: {e}"))
 }
 
-/// Tauri command: Get backend port
 #[tauri::command]
-fn get_backend_port(state: State<'_, Mutex<BackendState>>) -> Result<u16, String> {
-    let state_guard = state.lock().map_err(|e| e.to_string())?;
-    Ok(state_guard.port)
+fn check_backend_status() -> bool {
+    is_backend_ready()
 }
 
 /// Cleanup function called on app exit (handles all termination scenarios)
@@ -240,39 +247,13 @@ fn main() {
             started: false,
         }))
         .setup(|app| {
-            let app_handle = app.handle();
-            
-            // Spawn backend
-            match spawn_backend() {
-                Ok((child, port)) => {
-                    // Store the child process
-                    {
-                        let state = app.state::<Mutex<BackendState>>();
-                        if let Ok(mut state_guard) = state.lock() {
-                            state_guard.child = Some(child);
-                            state_guard.port = port;
-                        }
+            match start_backend(&app.handle()) {
+                Ok(child) => {
+                    let state = app.state::<Mutex<BackendState>>();
+                    state.lock().unwrap().child = Some(child);
+                    if !wait_for_backend(30) {
+                        log_line(&app.handle(), "[Warning] Backend may still be starting...");
                     }
-                    
-                    // Wait for backend to be ready in background
-                    let app_handle_clone = app_handle.clone();
-                    thread::spawn(move || {
-                        if wait_for_backend_sync(port, MAX_STARTUP_ATTEMPTS) {
-                            println!("[PhotoSense] Backend is ready!");
-                            
-                            // Mark as started
-                            let state = app_handle_clone.state::<Mutex<BackendState>>();
-                            if let Ok(mut state_guard) = state.lock() {
-                                state_guard.started = true;
-                            }
-                            
-                            // Emit event to frontend
-                            let _ = app_handle_clone.emit_all("backend-ready", port);
-                        } else {
-                            eprintln!("[PhotoSense] Backend failed to start within timeout");
-                            let _ = app_handle_clone.emit_all("backend-failed", "Timeout waiting for backend");
-                        }
-                    });
                 }
                 Err(e) => {
                     // Check if backend is already running (this is OK)
@@ -289,7 +270,6 @@ fn main() {
                     }
                 }
             }
-            
             Ok(())
         })
         .on_window_event(|event| {

@@ -14,15 +14,7 @@
       "all": false,
       "shell": {
         "all": false,
-        "open": true,
-        "sidecar": true,
-        "scope": [
-          {
-            "name": "photosense-backend",
-            "sidecar": true,
-            "args": true
-          }
-        ]
+        "open": true
       },
       "dialog": {
         "all": true
