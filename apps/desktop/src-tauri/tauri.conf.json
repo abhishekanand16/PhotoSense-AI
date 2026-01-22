@@ -14,15 +14,7 @@
       "all": false,
       "shell": {
         "all": false,
-        "open": true,
-        "sidecar": true,
-        "scope": [
-          {
-            "name": "photosense-backend",
-            "sidecar": true,
-            "args": true
-          }
-        ]
+        "open": true
       },
       "dialog": {
         "all": true
@@ -53,7 +45,7 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "externalBin": ["photosense-backend"],
+      "resources": ["resources/backend/**"],
       "macOS": {
         "minimumSystemVersion": "10.15",
         "exceptionDomain": "",

@@ -90,29 +90,43 @@ echo "  ✓ Backend built successfully"
 
 # Step 4: Copy backend to Tauri binaries location
 echo ""
-echo "[4/6] Preparing Tauri sidecar..."
+echo "[4/6] Preparing backend resources..."
 
 TAURI_DIR="$PROJECT_ROOT/apps/desktop/src-tauri"
-BINARIES_DIR="$TAURI_DIR/binaries"
+RESOURCES_DIR="$TAURI_DIR/resources/backend"
 
-# Clean and create binaries directory
-rm -rf "$BINARIES_DIR"
-mkdir -p "$BINARIES_DIR"
+# Clean old binaries folder if it exists (legacy)
+if [ -d "$TAURI_DIR/binaries" ]; then
+    echo "  Removing old binaries folder..."
+    rm -rf "$TAURI_DIR/binaries" 2>/dev/null || sudo rm -rf "$TAURI_DIR/binaries" 2>/dev/null || true
+fi
 
-# Tauri expects the sidecar at: binaries/name-target-triple
-# For PyInstaller onedir bundles, we need ALL files from the bundle
+# Clean and create resources directory
+# Fix permissions if owned by root
+if [ -d "$RESOURCES_DIR" ]; then
+    if [ ! -w "$RESOURCES_DIR" ]; then
+        echo "  Fixing permissions on resources directory..."
+        sudo rm -rf "$RESOURCES_DIR" 2>/dev/null || {
+            echo "ERROR: Cannot remove resources directory. Run manually:"
+            echo "  sudo rm -rf $RESOURCES_DIR"
+            exit 1
+        }
+    else
+        rm -rf "$RESOURCES_DIR"
+    fi
+fi
+mkdir -p "$RESOURCES_DIR"
 
-# Copy entire PyInstaller output
-cp -R "$BACKEND_DIR/"* "$BINARIES_DIR/"
+# Copy entire PyInstaller output next to the executable
+cp -R "$BACKEND_DIR/"* "$RESOURCES_DIR/"
 
-# Rename the main executable with target triple
-mv "$BINARIES_DIR/photosense-backend" "$BINARIES_DIR/photosense-backend-$TARGET"
-chmod +x "$BINARIES_DIR/photosense-backend-$TARGET"
+# Ensure the backend executable is runnable
+chmod +x "$RESOURCES_DIR/photosense-backend"
 
-echo "  ✓ Sidecar prepared: photosense-backend-$TARGET"
-echo "  Files in binaries/:"
-ls "$BINARIES_DIR" | head -5
-echo "  ... and $(ls "$BINARIES_DIR" | wc -l | tr -d ' ') total files"
+echo "  ✓ Backend resources prepared"
+echo "  Files in resources/backend/:"
+ls "$RESOURCES_DIR" | head -5
+echo "  ... and $(ls "$RESOURCES_DIR" | wc -l | tr -d ' ') total files"
 
 # Step 5: Build Tauri app
 echo ""
@@ -120,6 +134,24 @@ echo "[5/6] Building Tauri app (this takes 5-10 minutes)..."
 
 cd "$PROJECT_ROOT/apps/desktop"
 npm install --silent 2>/dev/null
+
+# Clean dist directory to avoid Vite build errors
+echo "  Cleaning dist directory..."
+if [ -d "dist" ]; then
+    # Try to fix permissions and remove
+    chmod -R u+w dist 2>/dev/null || true
+    rm -rf dist 2>/dev/null || {
+        echo "  Warning: Could not remove dist directory (may have permission issues)"
+        echo "  Moving dist to dist.old and creating new one..."
+        mv dist dist.old 2>/dev/null || {
+            echo "  ERROR: Cannot clean dist directory. Please run manually:"
+            echo "    sudo rm -rf apps/desktop/dist"
+            echo "  Then run this script again."
+            exit 1
+        }
+    }
+fi
+mkdir -p dist
 
 # Build the Tauri app
 npm run tauri build 2>&1 | grep -E "(Compiling|Finished|Bundling|Error|error)" | head -30
@@ -166,7 +198,7 @@ echo ""
 echo "Cleaning up build artifacts..."
 rm -rf "$PROJECT_ROOT/packaging/backend/build"
 rm -rf "$PROJECT_ROOT/packaging/backend/dist"
-rm -rf "$BINARIES_DIR"
+rm -rf "$RESOURCES_DIR"
 deactivate 2>/dev/null || true
 
 # Get DMG size
