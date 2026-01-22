@@ -91,6 +91,9 @@ torch_home/
 # Tauri sidecar binaries (generated, not committed)
 apps/desktop/src-tauri/binaries/
 
+# Tauri resources (bundled backend, generated during build)
+apps/desktop/src-tauri/resources/
+
 # Packaging build artifacts
 packaging/dist/
 packaging/backend/.build-venv/

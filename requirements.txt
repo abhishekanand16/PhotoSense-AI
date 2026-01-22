@@ -12,10 +12,10 @@ pillow>=12.1.0
 
 # Face detection & embeddings (ONNX, no TensorFlow)
 insightface>=0.7.3
-onnxruntime>=1.23.2
-# NOTE: On Python 3.13+, ml_dtypes 0.5+ requires numpy>=2.1 which conflicts with faiss/ultralytics.
-# We let pip resolve ml_dtypes/onnx transitively (accepts 0.4.x on Py3.13 with numpy<2).
-# For best compatibility, use Python 3.11 or 3.12.
+onnxruntime>=1.20.0
+# NOTE: ONNX 1.19+ requires ml_dtypes 0.5+ which needs numpy>=2.1, conflicting with faiss/ultralytics.
+# Pin ONNX to 1.17.x which works with ml_dtypes 0.4.x and numpy<2.
+onnx>=1.16.0,<1.18
 
 # Object detection
 ultralytics>=8.4.0
