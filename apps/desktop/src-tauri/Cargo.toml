@@ -12,7 +12,6 @@ tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
 tauri = { version = "1.5", features = [ "process-all",
-    "shell-sidecar",
     "shell-open",
     "process-command-api",
     "protocol-asset",
