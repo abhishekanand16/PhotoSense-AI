@@ -59,9 +59,9 @@ fn start_backend(app: &tauri::AppHandle) -> Result<std::process::Child, String> 
     log_line(app, "[PhotoSense] Starting backend...");
 
     #[cfg(target_os = "windows")]
-    let backend_name = "backend/photosense-backend.exe";
+    let backend_name = "resources/backend/photosense-backend.exe";
     #[cfg(not(target_os = "windows"))]
-    let backend_name = "backend/photosense-backend";
+    let backend_name = "resources/backend/photosense-backend";
 
     let backend_path = app
         .path_resolver()

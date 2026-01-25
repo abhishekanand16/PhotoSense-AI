@@ -88,7 +88,21 @@ cp "$SCRIPT_DIR/tauri.conf.json" "$BUILD_DIR/src-tauri/"
 echo "[3/3] Copying backend bundle..."
 RESOURCES_DIR="$BUILD_DIR/src-tauri/resources/backend"
 mkdir -p "$RESOURCES_DIR"
+
+# Copy all files from backend dist
 cp -R "$SCRIPT_DIR/dist/photosense-backend/"* "$RESOURCES_DIR/"
+
+# Ensure executable has correct permissions
+chmod +x "$RESOURCES_DIR/photosense-backend"
+
+# Verify the executable exists
+if [ ! -f "$RESOURCES_DIR/photosense-backend" ]; then
+    echo "ERROR: Backend executable not found after copy!"
+    exit 1
+fi
+
+echo "         Backend executable: $RESOURCES_DIR/photosense-backend"
+ls -lh "$RESOURCES_DIR/photosense-backend"
 
 echo ""
 echo "✅ Frontend build directory ready"
