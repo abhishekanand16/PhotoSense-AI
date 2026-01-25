@@ -1,109 +1,150 @@
 # PhotoSense-AI Packaging
 
-This folder contains everything needed to build installable desktop applications for **macOS** and **Windows**.
+This directory contains build scripts for creating distributable installers for PhotoSense-AI.
 
-## Quick Start
+## Windows Installer
 
-### macOS (creates .dmg installer)
-```bash
-cd packaging
-./build-macos.sh
-```
-Output: `dist/PhotoSense-AI-1.0.0-macos.dmg`
+The `windows/` directory contains everything needed to build a Windows installer.
 
-### Windows (creates .exe installer)
+### Quick Start
+
+**Option 1: Double-click (Easiest)**
+
+1. Navigate to `packaging\windows\` in File Explorer
+2. Double-click `install.bat`
+3. Follow the prompts
+
+**Option 2: PowerShell**
+
+1. Open PowerShell
+2. Navigate to the packaging directory:
+   ```powershell
+   cd path\to\PhotoSense-AI\packaging\windows
+   ```
+3. Run the installer builder:
+   ```powershell
+   .\install.ps1
+   ```
+
+4. **Follow the prompts** - the script will:
+   - Check for required tools (Python, Node.js, Rust)
+   - Offer to install missing tools via winget
+   - Build the Python backend (~15-30 minutes)
+   - Build the Tauri frontend (~10-15 minutes)
+   - Create the final installer
+
+5. **Find your installer at:**
+   ```
+   packaging\windows\dist\PhotoSense-AI-1.0.0-Setup.exe
+   ```
+
+### Prerequisites
+
+| Tool | Version | Installation |
+|------|---------|--------------|
+| Python | 3.10+ | `winget install Python.Python.3.12` or [python.org](https://www.python.org/downloads/) |
+| Node.js | 18+ | `winget install OpenJS.NodeJS.LTS` or [nodejs.org](https://nodejs.org/) |
+| Rust | Latest | `winget install Rustlang.Rustup` or [rustup.rs](https://rustup.rs/) |
+
+**Disk Space:** ~20GB free space recommended (for dependencies and build artifacts)
+
+### Build Scripts
+
+| Script | Description |
+|--------|-------------|
+| `install.bat` | **Recommended** - Double-click to run full build |
+| `install.ps1` | PowerShell version - runs full build with prerequisite checks |
+| `build-backend.bat` | Double-click to build backend only |
+| `build-backend.ps1` | PowerShell - builds Python backend with PyInstaller |
+| `build-frontend.bat` | Double-click to build frontend only (run backend first) |
+| `build-frontend.ps1` | PowerShell - builds Tauri frontend with NSIS installer |
+
+The `.bat` files are wrappers that run the `.ps1` scripts with proper execution policy, so you don't need to worry about PowerShell restrictions.
+
+### Build Options
+
 ```powershell
-cd packaging
-.\build-windows.ps1
-```
-Output: `dist\PhotoSense-AI-1.0.0-windows-setup.exe`
+# Full build (default)
+.\install.ps1
 
-## What Gets Built
+# Skip prerequisite checks (useful for CI/CD)
+.\install.ps1 -SkipChecks
 
-The build process creates a **self-contained application** that includes:
-- The React/Tauri desktop UI
-- The Python ML backend (bundled as executable)
-- All ML model download scripts
-- No Python or Node.js installation required by end users
+# Build only the backend
+.\install.ps1 -BackendOnly
 
-## Folder Structure
-
-```
-packaging/
-├── README.md                 # This file
-├── build-macos.sh           # One-click macOS build script
-├── build-windows.ps1        # One-click Windows build script
-├── backend/                  # Python backend bundling
-│   ├── photosense_backend.py    # Entry point for bundled backend
-│   ├── photosense_backend.spec  # PyInstaller spec file
-│   └── build.sh / build.ps1     # Backend-only build scripts
-├── frontend/                 # Tauri desktop app
-│   ├── tauri.conf.json          # Tauri config for bundled app
-│   ├── src/
-│   │   └── main.rs              # Rust code to launch sidecar
-│   └── build.sh / build.ps1     # Frontend-only build scripts
-├── installer/                # Installer creation
-│   ├── macos/
-│   │   ├── create-dmg.sh        # DMG creation script
-│   │   ├── dmg-background.png   # DMG background image
-│   │   └── entitlements.plist   # macOS code signing
-│   └── windows/
-│       ├── installer.nsi        # NSIS installer script
-│       └── installer-icon.ico   # Installer icon
-└── dist/                     # Build outputs (git-ignored)
+# Build only the frontend (requires backend to be built first)
+.\install.ps1 -FrontendOnly
 ```
 
-## Requirements
+### Output Structure
 
-### macOS Build Machine
-- macOS 12+ (for universal binary support)
-- Xcode Command Line Tools: `xcode-select --install`
-- Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Node.js 18+: `brew install node`
-- Python 3.10+: `brew install python@3.10`
-- create-dmg: `brew install create-dmg`
+After a successful build:
 
-### Windows Build Machine
-- Windows 10/11
-- Visual Studio Build Tools (for Rust)
-- Rust: https://rustup.rs
-- Node.js 18+: https://nodejs.org
-- Python 3.10+: https://python.org
-- NSIS: https://nsis.sourceforge.io (for installer creation)
+```
+packaging/windows/dist/
+├── backend/
+│   └── photosense-backend/
+│       ├── photosense-backend.exe    # Backend executable
+│       ├── _internal/                # Python + dependencies
+│       └── version.txt               # Build info
+└── PhotoSense-AI-1.0.0-Setup.exe     # Final installer
+```
 
-## Build Process Details
+### Installer Features
 
-### 1. Backend Bundling (PyInstaller)
-- Bundles entire Python environment + dependencies
-- Creates single executable: `photosense-backend` (macOS) or `photosense-backend.exe` (Windows)
-- Includes all ML pipeline code from `services/`
+The generated NSIS installer:
 
-### 2. Frontend Build (Tauri)
-- Builds React app with Vite
-- Compiles Rust wrapper that:
-  - Launches the bundled backend as a sidecar process
-  - Manages backend lifecycle (start on app open, stop on close)
-  - Provides native window chrome
+- **Single-file installer** - One .exe to distribute
+- **User-level installation** - No admin rights required
+- **Start Menu shortcuts** - Easy access to the app
+- **Desktop shortcut** - Optional during install
+- **Uninstaller** - Clean removal via Windows Settings
+- **WebView2 auto-install** - Automatically installs Microsoft Edge WebView2 if needed
 
-### 3. Installer Creation
-- **macOS**: Creates `.dmg` with drag-to-Applications interface
-- **Windows**: Creates NSIS installer with Start Menu shortcuts
+### Troubleshooting
 
-## Troubleshooting
+#### Build Fails at PyInstaller Step
 
-### "Backend failed to start"
-- Check if port 8000 is already in use
-- Look at logs in: `~/Library/Application Support/PhotoSense-AI/logs/` (macOS) or `%APPDATA%/PhotoSense-AI/logs/` (Windows)
+1. Ensure Python 3.10+ is installed and in PATH
+2. Try running `build-backend.ps1` separately to see detailed errors
+3. Check that all dependencies install correctly
 
-### "Models downloading slowly"
-- First launch downloads ~2GB of ML models
-- This is one-time; subsequent launches are fast
+#### Build Fails at Tauri Step
 
-### macOS "App is damaged" error
-- The app isn't code-signed for distribution
-- Right-click → Open → Open anyway
-- Or: `xattr -cr /Applications/PhotoSense-AI.app`
+1. Ensure Node.js 18+ and Rust are installed
+2. Try running `npm install` manually in `apps/desktop`
+3. Check Rust is properly configured: `rustup show`
 
-### Windows SmartScreen warning
-- Click "More info" → "Run anyway"
-- This is because the app isn't code-signed
+#### Installer Won't Run
+
+1. Windows SmartScreen may block unsigned executables
+2. Click "More info" then "Run anyway"
+3. Or sign the executable with a code signing certificate
+
+#### App Won't Start After Installation
+
+1. Check Windows Event Viewer for errors
+2. Ensure WebView2 runtime is installed
+3. Try running as Administrator once
+
+### Development Notes
+
+- **Backend entry point:** `backend-entry.py` - Clean Python entry for PyInstaller
+- **PyInstaller spec:** `backend.spec` - Configures bundling with all ML dependencies
+- **Tauri config:** `tauri.conf.json` - Windows-specific Tauri/NSIS configuration
+
+### CI/CD Integration
+
+For automated builds:
+
+```powershell
+# PowerShell
+.\install.ps1 -SkipChecks
+
+# Or run steps separately
+.\build-backend.ps1
+.\build-frontend.ps1
+```
+
+The scripts return appropriate exit codes (0 for success, non-zero for failure).

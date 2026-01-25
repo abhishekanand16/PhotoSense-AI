@@ -19,19 +19,26 @@
         "execute": false
       },
       "dialog": {
-        "all": false,
+        "all": true,
         "open": true,
-        "save": false,
+        "save": true,
         "message": true,
         "ask": true
       },
       "fs": {
-        "all": false,
+        "all": true,
         "readFile": true,
+        "writeFile": true,
         "readDir": true,
+        "copyFile": true,
+        "createDir": true,
+        "removeDir": true,
+        "removeFile": true,
+        "renameFile": true,
         "scope": [
           "$APPDATA/**",
           "$APPDATA/PhotoSense-AI/**",
+          "$LOCALAPPDATA/**",
           "$DOCUMENT/**",
           "$PICTURE/**",
           "$HOME/**",
@@ -46,6 +53,7 @@
         "assetScope": [
           "$APPDATA/**",
           "$APPDATA/PhotoSense-AI/**",
+          "$LOCALAPPDATA/**",
           "$DOCUMENT/**",
           "$PICTURE/**",
           "$HOME/**",
@@ -53,10 +61,12 @@
         ]
       },
       "process": {
-        "all": true
+        "all": true,
+        "relaunch": true,
+        "exit": true
       },
       "window": {
-        "all": false,
+        "all": true,
         "close": true,
         "hide": true,
         "show": true,
@@ -64,13 +74,17 @@
         "minimize": true,
         "unmaximize": true,
         "unminimize": true,
-        "startDragging": true
+        "startDragging": true,
+        "setTitle": true,
+        "setSize": true,
+        "setPosition": true
       }
     },
     "bundle": {
       "active": true,
       "category": "Photography",
-      "copyright": "Copyright © 2024 PhotoSense-AI",
+      "copyright": "Copyright © 2024-2026 PhotoSense-AI",
+      "externalBin": [],
       "resources": [
         "resources/backend/**"
       ],
@@ -82,21 +96,18 @@
         "icons/icon.ico"
       ],
       "identifier": "com.photosense.ai",
-      "longDescription": "PhotoSense-AI is a privacy-focused desktop application that uses AI to automatically organize and search your photos. All processing happens locally on your device.",
+      "longDescription": "PhotoSense-AI is a privacy-focused desktop application that uses AI to automatically organize, tag, and search your photos. All processing happens locally on your device - your photos never leave your computer.",
       "shortDescription": "AI-powered local photo organizer",
-      "macOS": {
-        "entitlements": null,
-        "exceptionDomain": null,
-        "frameworks": [],
-        "minimumSystemVersion": "10.15",
-        "providerShortName": null,
-        "signingIdentity": null
-      },
+      "targets": ["nsis"],
       "windows": {
         "certificateThumbprint": null,
         "digestAlgorithm": "sha256",
         "timestampUrl": "",
         "wix": null,
+        "webviewInstallMode": {
+          "type": "downloadBootstrapper",
+          "silent": true
+        },
         "nsis": {
           "installerIcon": "icons/icon.ico",
           "headerImage": null,
@@ -104,13 +115,13 @@
           "license": null,
           "installMode": "currentUser",
           "languages": ["English"],
-          "displayLanguageSelector": false
+          "displayLanguageSelector": false,
+          "compression": "lzma"
         }
-      },
-      "targets": ["dmg", "nsis"]
+      }
     },
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost https://*.tile.openstreetmap.org https://unpkg.com data:; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' https://unpkg.com; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 https://nominatim.openstreetmap.org"
+      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost https://*.tile.openstreetmap.org https://unpkg.com data: blob:; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' https://unpkg.com; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 https://nominatim.openstreetmap.org; font-src 'self' data:"
     },
     "updater": {
       "active": false
@@ -126,7 +137,10 @@
         "minHeight": 650,
         "center": true,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "maximized": false,
+        "visible": true,
+        "focus": true
       }
     ]
   }
