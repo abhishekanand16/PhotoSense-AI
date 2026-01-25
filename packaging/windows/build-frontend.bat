@@ -116,14 +116,14 @@ exit /b 1
 :: Check user profile location first
 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
     set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
-    for /f "tokens=2" %%V in ('"%USERPROFILE%\.cargo\bin\cargo.exe" --version 2^>^&1') do echo          Rust: %%V
+    for /f "tokens=*" %%V in ('"%USERPROFILE%\.cargo\bin\cargo.exe" --version 2^>^&1') do echo          Rust: %%V
     goto :rust_found
 )
 
 :: Check if cargo in PATH works
 cargo --version >nul 2>nul
 if %ERRORLEVEL% equ 0 (
-    for /f "tokens=2" %%V in ('cargo --version 2^>^&1') do echo          Rust: %%V
+    for /f "tokens=*" %%V in ('cargo --version 2^>^&1') do echo          Rust: %%V
     goto :rust_found
 )
 
@@ -215,9 +215,21 @@ echo   [4/5] Installing npm dependencies...
 
 cd /d "%BUILD_DIR%"
 
-call %NPM_EXE% install 2>nul
+:: Run npm install with output visible for debugging
+echo          Running npm install (this may take a few minutes)...
+call "%NPM_EXE%" install
+
 if %ERRORLEVEL% neq 0 (
+    echo.
     echo          ERROR: npm install failed!
+    echo          Check the error messages above.
+    echo.
+    echo          Common fixes:
+    echo          - Make sure you have internet connection
+    echo          - Try running as Administrator
+    echo          - Delete node_modules and try again
+    echo.
+    cd /d "%SCRIPT_DIR%"
     pause
     exit /b 1
 )
@@ -232,7 +244,7 @@ echo   [5/5] Building Tauri application...
 echo          This takes 5-15 minutes...
 echo.
 
-call %NPM_EXE% run tauri build
+call "%NPM_EXE%" run tauri build
 
 if %ERRORLEVEL% neq 0 (
     echo.
