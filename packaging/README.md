@@ -8,10 +8,12 @@ Build a complete Windows installer for PhotoSense-AI.
 
 1. Open File Explorer
 2. Navigate to `packaging\windows\`
-3. **Double-click `install.bat`**
+3. **Right-click `install.bat` → "Run as administrator"**
 4. Wait 30-60 minutes
 
 That's it. The installer handles everything automatically.
+
+> **Note:** Administrator privileges are required to install Visual Studio Build Tools and avoid permission errors.
 
 ## What It Does
 
@@ -48,14 +50,19 @@ This is your distributable installer. Users just double-click it to install Phot
 
 ## Troubleshooting
 
-### "InsightFace installation failed"
+### "InsightFace installation failed" or "Permission denied"
 
-Visual Studio Build Tools installation may have failed. Manually install:
+**If you see permission errors:**
+1. Close the installer
+2. Right-click `install.bat` → "Run as administrator"
+3. Try again
+
+**If Visual Studio Build Tools are missing:**
 1. Download: https://aka.ms/vs/17/release/vs_BuildTools.exe
 2. Run installer
 3. Select "Desktop development with C++"
 4. Wait for installation (~15 minutes)
-5. Run `install.bat` again
+5. Run `install.bat` as administrator again
 
 ### "Rust couldn't choose a version"
 

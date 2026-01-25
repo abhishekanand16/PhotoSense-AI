@@ -56,52 +56,57 @@ set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 set "VENV_PIP=%VENV_DIR%\Scripts\pip.exe"
 
 :: ============================================================
-:: Upgrade pip
+:: Upgrade pip and Clear Cache
 :: ============================================================
-echo   [2/5] Upgrading pip...
+echo   [2/5] Upgrading pip and clearing cache...
 
-"%VENV_PYTHON%" -m pip install --upgrade pip setuptools wheel --quiet
+"%VENV_PYTHON%" -m pip cache purge >nul 2>nul
+"%VENV_PYTHON%" -m pip install --upgrade pip setuptools wheel --quiet --no-cache-dir
 
 :: ============================================================
 :: Install Dependencies
 :: ============================================================
 echo   [3/5] Installing dependencies (10-30 minutes)...
 
-:: Core dependencies first
-"%VENV_PIP%" install "numpy>=1.26.4,<2" --quiet
-"%VENV_PIP%" install Cython --quiet
+:: Core dependencies first (all with --no-cache-dir to avoid permission issues)
+"%VENV_PIP%" install "numpy>=1.26.4,<2" --quiet --no-cache-dir
+"%VENV_PIP%" install Cython --quiet --no-cache-dir
 
 :: PyTorch
 echo          Installing PyTorch...
-"%VENV_PIP%" install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+"%VENV_PIP%" install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet --no-cache-dir
 
 :: Computer vision
-"%VENV_PIP%" install opencv-python pillow --quiet
+"%VENV_PIP%" install opencv-python pillow --quiet --no-cache-dir
 
 :: ONNX
-"%VENV_PIP%" install onnxruntime "onnx>=1.16.0,<1.18" --quiet
+"%VENV_PIP%" install onnxruntime "onnx>=1.16.0,<1.18" --quiet --no-cache-dir
 
 :: InsightFace (critical - may take time to compile)
 echo          Installing InsightFace...
-"%VENV_PIP%" install insightface --no-build-isolation
+"%VENV_PIP%" install insightface --no-build-isolation --no-cache-dir
 if %ERRORLEVEL% neq 0 (
-    echo          Retrying InsightFace installation...
-    "%VENV_PIP%" install insightface
+    echo          Retrying with cache disabled...
+    "%VENV_PIP%" install insightface --no-cache-dir
     if !ERRORLEVEL! neq 0 (
-        echo.
-        echo   ERROR: InsightFace installation failed
-        echo   Install Visual Studio Build Tools from:
-        echo   https://aka.ms/vs/17/release/vs_BuildTools.exe
-        echo   Select "Desktop development with C++"
-        exit /b 1
+        echo          Trying to fix permissions...
+        "%VENV_PIP%" cache purge >nul 2>nul
+        "%VENV_PIP%" install insightface --no-cache-dir
+        if !ERRORLEVEL! neq 0 (
+            echo.
+            echo   ERROR: InsightFace installation failed due to permissions
+            echo   Please run this script as Administrator:
+            echo   Right-click install.bat ^> "Run as administrator"
+            exit /b 1
+        )
     )
 )
 
 :: Remaining packages
-"%VENV_PIP%" install -r "%PROJECT_ROOT%\requirements.txt" --quiet
+"%VENV_PIP%" install -r "%PROJECT_ROOT%\requirements.txt" --quiet --no-cache-dir
 
 :: PyInstaller
-"%VENV_PIP%" install pyinstaller --quiet
+"%VENV_PIP%" install pyinstaller --quiet --no-cache-dir
 
 echo          Dependencies installed!
 
