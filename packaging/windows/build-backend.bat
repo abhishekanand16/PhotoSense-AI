@@ -32,15 +32,7 @@ echo   [1/6] Finding Python...
 
 set "PYTHON_EXE="
 
-:: Check PATH first
-where python >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    set "PYTHON_EXE=python"
-    for /f "tokens=*" %%V in ('python --version 2^>^&1') do echo          Using: %%V
-    goto :found_python
-)
-
-:: Check common locations
+:: Check common installation locations FIRST (skip Windows Store alias)
 for %%P in (
     "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
@@ -50,10 +42,26 @@ for %%P in (
     "C:\Python312\python.exe"
     "C:\Python311\python.exe"
     "C:\Python310\python.exe"
+    "%ProgramFiles%\Python313\python.exe"
+    "%ProgramFiles%\Python312\python.exe"
+    "%ProgramFiles%\Python311\python.exe"
+    "%ProgramFiles%\Python310\python.exe"
 ) do (
-    if exist %%P (
+    if exist "%%~P" (
         set "PYTHON_EXE=%%~P"
-        echo          Found: !PYTHON_EXE!
+        for /f "tokens=*" %%V in ('"%%~P" --version 2^>^&1') do echo          Found: %%V at %%~P
+        goto :found_python
+    )
+)
+
+:: Check if python in PATH actually works (not Windows Store alias)
+where python >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    :: Test if it actually runs
+    python -c "print('ok')" >nul 2>nul
+    if !ERRORLEVEL! equ 0 (
+        set "PYTHON_EXE=python"
+        for /f "tokens=*" %%V in ('python --version 2^>^&1') do echo          Found: %%V
         goto :found_python
     )
 )
@@ -70,6 +78,7 @@ if %ERRORLEVEL% equ 0 (
         echo          Python installed successfully!
         set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
         set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+        timeout /t 3 >nul
         goto :found_python
     )
 )
@@ -81,7 +90,7 @@ curl -L -o "%PY_INSTALLER%" "https://www.python.org/ftp/python/3.12.0/python-3.1
 if exist "%PY_INSTALLER%" (
     echo          Running Python installer...
     "%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
-    timeout /t 10 >nul
+    timeout /t 15 >nul
     del "%PY_INSTALLER%" 2>nul
     set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
     set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
@@ -93,10 +102,20 @@ if exist "%PY_INSTALLER%" (
 
 echo          ERROR: Could not install Python automatically.
 echo          Please install from https://www.python.org/downloads/
+echo          Make sure to check "Add Python to PATH" during installation.
 pause
 exit /b 1
 
 :found_python
+
+:: Verify Python actually works
+"%PYTHON_EXE%" -c "print('Python OK')" >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo          ERROR: Python found but not working properly.
+    echo          Please reinstall from https://www.python.org/downloads/
+    pause
+    exit /b 1
+)
 
 :: ============================================================
 :: Step 2: Create Virtual Environment
@@ -113,6 +132,7 @@ echo          Creating new venv...
 "%PYTHON_EXE%" -m venv "%VENV_DIR%"
 if %ERRORLEVEL% neq 0 (
     echo          ERROR: Failed to create virtual environment
+    pause
     exit /b 1
 )
 
@@ -188,6 +208,7 @@ cd /d "%SCRIPT_DIR%"
 if %ERRORLEVEL% neq 0 (
     echo.
     echo          ERROR: PyInstaller build failed!
+    pause
     exit /b 1
 )
 
@@ -196,6 +217,7 @@ set "BACKEND_EXE=%SCRIPT_DIR%\dist\photosense-backend\photosense-backend.exe"
 if not exist "%BACKEND_EXE%" (
     echo.
     echo          ERROR: Build output not found!
+    pause
     exit /b 1
 )
 

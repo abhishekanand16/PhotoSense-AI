@@ -4,6 +4,7 @@ setlocal enabledelayedexpansion
 :: ============================================================
 :: Build PhotoSense-AI Frontend (Tauri) for Windows
 :: Creates the NSIS installer with backend sidecar
+:: Automatically installs Node.js and Rust if missing.
 :: ============================================================
 
 title PhotoSense-AI Frontend Build
@@ -37,6 +38,7 @@ if not exist "%BACKEND_BUNDLE%\photosense-backend.exe" (
     echo          ERROR: Backend bundle not found!
     echo          Run build-backend.bat first.
     echo.
+    pause
     exit /b 1
 )
 echo          Backend bundle: OK
@@ -47,17 +49,20 @@ echo          Backend bundle: OK
 set "NODE_EXE="
 set "NPM_EXE="
 
-where node >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    set "NODE_EXE=node"
-    for /f "tokens=*" %%V in ('node --version 2^>^&1') do echo          Node.js: %%V
+:: Check common location first
+if exist "%ProgramFiles%\nodejs\node.exe" (
+    set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+    set "NPM_EXE=%ProgramFiles%\nodejs\npm.cmd"
+    for /f "tokens=*" %%V in ('"%ProgramFiles%\nodejs\node.exe" --version 2^>^&1') do echo          Node.js: %%V
     goto :node_found
 )
 
-:: Check common locations
-if exist "%ProgramFiles%\nodejs\node.exe" (
-    set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
-    echo          Node.js: Found at !NODE_EXE!
+:: Check if node in PATH works
+node --version >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    set "NODE_EXE=node"
+    set "NPM_EXE=npm"
+    for /f "tokens=*" %%V in ('node --version 2^>^&1') do echo          Node.js: %%V
     goto :node_found
 )
 
@@ -65,19 +70,17 @@ if exist "%ProgramFiles%\nodejs\node.exe" (
 echo          Node.js not found. Installing automatically...
 echo.
 
-:: Check if winget is available
 where winget >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     echo          Installing Node.js via winget...
     winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
     if %ERRORLEVEL% equ 0 (
         echo          Node.js installed successfully!
-        :: Refresh PATH
-        set "PATH=%ProgramFiles%\nodejs;%PATH%"
         set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+        set "NPM_EXE=%ProgramFiles%\nodejs\npm.cmd"
+        set "PATH=%ProgramFiles%\nodejs;%PATH%"
+        timeout /t 3 >nul
         goto :node_found
-    ) else (
-        echo          WARNING: winget install failed. Trying alternative...
     )
 )
 
@@ -86,12 +89,13 @@ echo          Downloading Node.js installer...
 set "NODE_INSTALLER=%TEMP%\node_installer.msi"
 curl -L -o "%NODE_INSTALLER%" "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" 2>nul
 if exist "%NODE_INSTALLER%" (
-    echo          Running Node.js installer (this may require admin)...
+    echo          Running Node.js installer...
     msiexec /i "%NODE_INSTALLER%" /quiet /norestart
-    timeout /t 5 >nul
+    timeout /t 10 >nul
     del "%NODE_INSTALLER%" 2>nul
-    set "PATH=%ProgramFiles%\nodejs;%PATH%"
     set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+    set "NPM_EXE=%ProgramFiles%\nodejs\npm.cmd"
+    set "PATH=%ProgramFiles%\nodejs;%PATH%"
     if exist "!NODE_EXE!" (
         echo          Node.js installed successfully!
         goto :node_found
@@ -105,32 +109,21 @@ exit /b 1
 
 :node_found
 
-:: Find npm
-where npm >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    set "NPM_EXE=npm"
-) else (
-    if exist "%ProgramFiles%\nodejs\npm.cmd" (
-        set "NPM_EXE=%ProgramFiles%\nodejs\npm.cmd"
-    ) else (
-        echo          ERROR: npm not found!
-        exit /b 1
-    )
-)
-
 :: ============================================================
 :: Check and Install Rust
 :: ============================================================
-where cargo >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    for /f "tokens=*" %%V in ('cargo --version 2^>^&1') do echo          Rust: %%V
+
+:: Check user profile location first
+if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
+    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+    for /f "tokens=2" %%V in ('"%USERPROFILE%\.cargo\bin\cargo.exe" --version 2^>^&1') do echo          Rust: %%V
     goto :rust_found
 )
 
-:: Check user profile location
-if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
-    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
-    echo          Rust: Found in user profile
+:: Check if cargo in PATH works
+cargo --version >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    for /f "tokens=2" %%V in ('cargo --version 2^>^&1') do echo          Rust: %%V
     goto :rust_found
 )
 
@@ -138,19 +131,17 @@ if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
 echo          Rust not found. Installing automatically...
 echo.
 
-:: Check if winget is available
 where winget >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     echo          Installing Rust via winget...
     winget install Rustlang.Rustup --accept-package-agreements --accept-source-agreements
     if %ERRORLEVEL% equ 0 (
-        echo          Rust installed successfully!
-        :: Initialize rustup
+        echo          Initializing Rust...
         "%USERPROFILE%\.cargo\bin\rustup.exe" default stable 2>nul
         set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+        timeout /t 3 >nul
+        echo          Rust installed successfully!
         goto :rust_found
-    ) else (
-        echo          WARNING: winget install failed. Trying alternative...
     )
 )
 
@@ -161,6 +152,7 @@ curl -L -o "%RUSTUP_INIT%" "https://win.rustup.rs/x86_64" 2>nul
 if exist "%RUSTUP_INIT%" (
     echo          Running Rust installer...
     "%RUSTUP_INIT%" -y --default-toolchain stable 2>nul
+    timeout /t 5 >nul
     del "%RUSTUP_INIT%" 2>nul
     set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
     if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
@@ -226,6 +218,7 @@ cd /d "%BUILD_DIR%"
 call %NPM_EXE% install 2>nul
 if %ERRORLEVEL% neq 0 (
     echo          ERROR: npm install failed!
+    pause
     exit /b 1
 )
 
@@ -245,6 +238,7 @@ if %ERRORLEVEL% neq 0 (
     echo.
     echo          ERROR: Tauri build failed!
     cd /d "%SCRIPT_DIR%"
+    pause
     exit /b 1
 )
 
