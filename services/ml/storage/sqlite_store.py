@@ -592,6 +592,57 @@ class SQLiteStore:
                 cursor.execute("SELECT COUNT(*) FROM photos WHERE file_path LIKE ?", (like_pattern,))
                 return int(cursor.fetchone()[0] or 0)
 
+    def get_unprocessed_photos(self, limit: int = 0) -> List[Dict]:
+        """
+        Get photos that haven't been ML-processed yet.
+        
+        Args:
+            limit: Maximum number of photos to return (0 = no limit)
+            
+        Returns:
+            List of photo dicts with id, file_path, etc.
+        """
+        with self._get_connection(readonly=True) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            try:
+                query = """
+                    SELECT id, file_path, date_taken, camera_model, width, height, file_size, created_at
+                    FROM photos
+                    WHERE ml_processed IS NULL OR ml_processed = 0
+                    ORDER BY created_at ASC
+                """
+                if limit > 0:
+                    query += f" LIMIT {limit}"
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+            except sqlite3.OperationalError:
+                # If ml_processed column doesn't exist, return empty (older schema)
+                return []
+
+    def count_unprocessed_photos(self) -> int:
+        """Count photos that haven't been ML-processed yet."""
+        with self._get_connection(readonly=True) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM photos WHERE ml_processed IS NULL OR ml_processed = 0"
+                )
+                return int(cursor.fetchone()[0] or 0)
+            except sqlite3.OperationalError:
+                return 0
+
+    def count_processed_photos(self) -> int:
+        """Count photos that have been ML-processed."""
+        with self._get_connection(readonly=True) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT COUNT(*) FROM photos WHERE ml_processed = 1")
+                return int(cursor.fetchone()[0] or 0)
+            except sqlite3.OperationalError:
+                return 0
+
     def add_face_with_embedding(
         self,
         photo_id: int,
@@ -983,6 +1034,57 @@ class SQLiteStore:
         )
         conn.commit()
         conn.close()
+
+    def search_people_by_name(self, query: str) -> List[Dict]:
+        """
+        Search people by name with partial matching support.
+        
+        Args:
+            query: Search term (e.g., "John" matches "John Doe", "Johnny")
+            
+        Returns:
+            List of dicts with person info and match type (exact/partial)
+        """
+        conn = self._connect(readonly=True)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        query_lower = query.lower().strip()
+        
+        # Search for names that match (case insensitive)
+        cursor.execute(
+            """
+            SELECT id, cluster_id, name,
+                   CASE 
+                       WHEN LOWER(name) = ? THEN 'exact'
+                       WHEN LOWER(name) LIKE ? THEN 'partial'
+                       ELSE 'word'
+                   END as match_type
+            FROM people
+            WHERE name IS NOT NULL 
+              AND name != ''
+              AND (LOWER(name) = ? OR LOWER(name) LIKE ?)
+            ORDER BY 
+                CASE WHEN LOWER(name) = ? THEN 0 ELSE 1 END,
+                name
+            """,
+            (query_lower, f"%{query_lower}%", query_lower, f"%{query_lower}%", query_lower),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_photo_ids_for_person(self, person_id: int) -> List[int]:
+        """Get all photo IDs containing a specific person."""
+        conn = self._connect(readonly=True)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT photo_id FROM faces WHERE person_id = ?",
+            (person_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
 
     def merge_people(self, source_person_id: int, target_person_id: int) -> None:
         """Merge source person into target person."""

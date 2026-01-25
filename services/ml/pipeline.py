@@ -135,6 +135,309 @@ class MLPipeline:
         """Get all pet embeddings from database for FAISS rebuild."""
         return self.store.get_all_pet_embeddings_with_detections()
 
+    def import_photo_metadata_only_sync(self, photo_path: str) -> Dict:
+        """
+        SYNCHRONOUS version of import - designed to run in thread pool.
+        Fast import with EXIF metadata only, no ML processing.
+        
+        This is Phase 1 of the decoupled import process:
+        - Extract EXIF metadata
+        - Add to database
+        - Photos immediately visible in dashboard
+        - NO ML operations (face/object detection happens later)
+        """
+        # Validate path for safety (prevents traversal/symlink attacks)
+        try:
+            validated_path = validate_photo_path(photo_path)
+            photo_path = str(validated_path)
+        except ValueError as e:
+            return {"status": "error", "reason": str(e)}
+        
+        # Extract EXIF metadata
+        metadata = extract_exif_metadata(photo_path)
+        
+        photo_id = self.store.add_photo(
+            file_path=photo_path,
+            date_taken=metadata.get("date_taken"),
+            camera_model=metadata.get("camera_model"),
+            width=metadata.get("width"),
+            height=metadata.get("height"),
+            file_size=metadata.get("file_size"),
+        )
+
+        if photo_id is None:
+            # Photo already exists - get existing photo
+            existing_photo = self.store.get_photo_by_path(photo_path)
+            if existing_photo:
+                photo_id = existing_photo["id"]
+                
+                # Store location if GPS coordinates are available and not already stored
+                if metadata.get("latitude") is not None and metadata.get("longitude") is not None:
+                    existing_location = self.store.get_location(photo_id)
+                    if not existing_location:
+                        self.store.add_location(
+                            photo_id=photo_id,
+                            latitude=metadata["latitude"],
+                            longitude=metadata["longitude"]
+                        )
+                
+                return {"status": "exists", "photo_id": photo_id}
+            else:
+                return {"status": "skipped", "reason": "duplicate"}
+
+        # Store location if GPS coordinates are available
+        if metadata.get("latitude") is not None and metadata.get("longitude") is not None:
+            self.store.add_location(
+                photo_id=photo_id,
+                latitude=metadata["latitude"],
+                longitude=metadata["longitude"]
+            )
+
+        return {
+            "status": "imported",
+            "photo_id": photo_id,
+            "date_taken": metadata.get("date_taken"),
+            "has_location": metadata.get("latitude") is not None,
+        }
+
+    def process_photo_ml_sync(self, photo_id: int, photo_path: str) -> Dict:
+        """
+        SYNCHRONOUS ML processing - designed to run in thread pool.
+        
+        This is Phase 2 of the decoupled process:
+        - Face detection + embeddings
+        - Object detection  
+        - Pet detection + embeddings
+        - Scene detection (Florence-2, CLIP, Places365)
+        - Image embeddings
+        
+        All operations are intentionally synchronous so they can run
+        in a ThreadPoolExecutor without blocking the async event loop.
+        """
+        import logging
+        from services.ml.utils.image_cache import get_image_cache
+
+        results: Dict = {
+            "photo_id": photo_id,
+            "faces": [],
+            "objects": [],
+            "pets": [],
+            "scenes": [],
+            "image_embedding_id": None,
+        }
+
+        # Validate path for safety
+        try:
+            validated_path = validate_photo_path(photo_path)
+            photo_path = str(validated_path)
+        except ValueError as e:
+            logging.error(f"Invalid photo path: {e}")
+            try:
+                self.store.mark_photo_ml_error(photo_id, str(e))
+            except Exception:
+                pass
+            return {"status": "error", "reason": str(e), **results}
+
+        # Skip already-processed photos (prevents rescanning)
+        try:
+            if self.store.is_photo_ml_processed(photo_id):
+                return {"status": "skipped", "reason": "already_processed", **results}
+        except Exception:
+            pass
+
+        image_cache = get_image_cache()
+        try:
+            cached = image_cache.decode_image(photo_path)
+            if cached is None:
+                logging.error(f"Could not decode image: {photo_path}")
+                try:
+                    self.store.mark_photo_ml_error(photo_id, "decode_failed")
+                except Exception:
+                    pass
+                return {"status": "error", "reason": "decode_failed", **results}
+
+            # Extract cached images and scale factors
+            face_image = cached["face_bgr"]
+            face_scale = cached["scale_factors"]["face"]
+            ml_image_bgr = cached["ml_bgr"]
+            ml_image_rgb = cached["ml_rgb"]
+            ml_scale = cached["scale_factors"]["ml"]
+            florence_image = cached["florence_rgb"]
+            original_bgr = cached["original_bgr"]
+
+            # FACE DETECTION (with embeddings)
+            face_detections = self.face_detector.detect_with_embeddings(
+                photo_path,
+                image_bgr=face_image,
+                scale_factor=face_scale,
+            )
+
+            faces_for_faiss = []
+            auto_assigned_count = 0
+            for face_data in face_detections:
+                x, y, w, h = face_data["bbox"]
+                conf = face_data["confidence"]
+                embedding = face_data["embedding"]
+
+                auto_person_id = None
+                if conf >= CLUSTERING_CONFIG["min_confidence"]:
+                    try:
+                        auto_person_id = self._find_matching_person(embedding)
+                        if auto_person_id:
+                            auto_assigned_count += 1
+                    except Exception as e:
+                        logging.warning(f"Identity matching failed: {str(e)}")
+
+                face_id = self.store.add_face_with_embedding(
+                    photo_id=photo_id,
+                    bbox_x=x,
+                    bbox_y=y,
+                    bbox_w=w,
+                    bbox_h=h,
+                    confidence=conf,
+                    embedding=embedding,
+                    person_id=auto_person_id,
+                )
+
+                faces_for_faiss.append((face_id, embedding))
+                results["faces"].append(face_id)
+
+            for face_id, embedding in faces_for_faiss:
+                self.index.add_vectors("face", embedding.reshape(1, -1), [face_id])
+
+            # OBJECT DETECTION
+            try:
+                object_detections = self.object_detector.detect(
+                    photo_path,
+                    image_bgr=ml_image_bgr,
+                    scale_factor=ml_scale,
+                )
+                for x, y, w, h, category, conf in object_detections:
+                    object_id = self.store.add_object(
+                        photo_id=photo_id,
+                        bbox_x=x,
+                        bbox_y=y,
+                        bbox_w=w,
+                        bbox_h=h,
+                        category=category,
+                        confidence=conf,
+                    )
+                    results["objects"].append(object_id)
+            except Exception as e:
+                logging.warning(f"Object detection failed for {photo_path}: {e}")
+
+            # PET DETECTION & EMBEDDING
+            try:
+                animal_detections = self.object_detector.detect_animals(
+                    photo_path,
+                    min_confidence=0.4,
+                    image_bgr=ml_image_bgr,
+                    scale_factor=ml_scale,
+                )
+
+                if animal_detections:
+                    img = original_bgr
+                    img_height, img_width = img.shape[:2]
+                    pets_for_faiss = []
+
+                    for x, y, w, h, species, conf in animal_detections:
+                        padding = 0.2
+                        pad_x = int(w * padding)
+                        pad_y = int(h * padding)
+
+                        crop_x1 = max(0, x - pad_x)
+                        crop_y1 = max(0, y - pad_y)
+                        crop_x2 = min(img_width, x + w + pad_x)
+                        crop_y2 = min(img_height, y + h + pad_y)
+
+                        pet_crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
+                        if pet_crop.shape[0] < 32 or pet_crop.shape[1] < 32:
+                            continue
+
+                        pet_embedding = self.image_embedder.embed_crop(pet_crop)
+                        if np.allclose(pet_embedding, 0):
+                            continue
+
+                        pet_detection_id = self.store.add_pet_detection_with_embedding(
+                            photo_id=photo_id,
+                            bbox_x=x,
+                            bbox_y=y,
+                            bbox_w=w,
+                            bbox_h=h,
+                            species=species,
+                            confidence=conf,
+                            embedding=pet_embedding,
+                        )
+
+                        pets_for_faiss.append((pet_detection_id, pet_embedding))
+                        results["pets"].append(pet_detection_id)
+
+                    for pet_detection_id, pet_embedding in pets_for_faiss:
+                        self.index.add_vectors("pet", pet_embedding.reshape(1, -1), [pet_detection_id])
+            except Exception as e:
+                logging.warning(f"Pet detection failed for {photo_path}: {e}")
+
+            # IMAGE EMBEDDING
+            try:
+                image_embedding = self.image_embedder.embed_pil(ml_image_rgb)
+                self.index.add_vectors("image", image_embedding.reshape(1, -1), [photo_id])
+                results["image_embedding_id"] = photo_id
+            except Exception as e:
+                logging.warning(f"Image embedding failed for {photo_path}: {e}")
+
+            # FUSED SCENE DETECTION
+            try:
+                fused_tags = self._detect_scenes_fused(
+                    photo_path,
+                    results.get("objects", []),
+                    ml_image_rgb=ml_image_rgb,
+                    florence_image_rgb=florence_image,
+                )
+
+                stored_tags = set()
+                for tag, confidence, source in fused_tags:
+                    if tag in stored_tags:
+                        continue
+                    self.store.add_scene(photo_id=photo_id, scene_label=tag, confidence=confidence)
+                    stored_tags.add(tag)
+                    results["scenes"].append(tag)
+
+                # Store Florence tags separately for precise object UI fallback
+                florence_prefix = "florence:"
+                stored_florence_tags = set()
+                for tag, confidence, source in fused_tags:
+                    if source != "florence":
+                        continue
+                    prefixed_tag = f"{florence_prefix}{tag}"
+                    if prefixed_tag in stored_florence_tags:
+                        continue
+                    self.store.add_scene(photo_id=photo_id, scene_label=prefixed_tag, confidence=confidence)
+                    stored_florence_tags.add(prefixed_tag)
+            except Exception as e:
+                logging.warning(f"Scene detection failed for {photo_path}: {e}")
+                results["scenes"] = []
+
+            # Mark processed
+            try:
+                self.store.mark_photo_ml_processed(photo_id)
+            except Exception:
+                pass
+            
+            results["status"] = "processed"
+            return results
+        except Exception as e:
+            logging.error(f"Fatal ML processing error for {photo_path}: {e}", exc_info=True)
+            try:
+                self.store.mark_photo_ml_error(photo_id, str(e))
+            except Exception:
+                pass
+            return {"status": "error", "reason": str(e), **results}
+        finally:
+            try:
+                image_cache.clear(photo_path)
+            except Exception:
+                pass
+
     async def import_photo(self, photo_path: str) -> Dict:
         """Import a photo with metadata only (no face/object detection).
         

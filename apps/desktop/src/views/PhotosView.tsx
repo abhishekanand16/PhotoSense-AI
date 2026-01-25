@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
-import { photosApi, Photo } from "../services/api";
-import { Image as ImageIcon, Calendar, Trash2, Check, Info } from "lucide-react";
+import { photosApi, scanApi, Photo, GlobalScanStatus } from "../services/api";
+import { Image as ImageIcon, Calendar, Trash2, Check, Info, Loader2 } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
 import MetadataPanel from "../components/MetadataPanel";
@@ -13,6 +13,7 @@ const PhotosView: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [metadataPhotoId, setMetadataPhotoId] = useState<number | null>(null);
+  const [scanStatus, setScanStatus] = useState<GlobalScanStatus | null>(null);
 
   useEffect(() => {
     loadPhotos();
@@ -26,6 +27,23 @@ const PhotosView: React.FC = () => {
     return () => {
       window.removeEventListener('refresh-photos', handleRefresh);
     };
+  }, []);
+
+  // Track scan status to show background activity indicator
+  useEffect(() => {
+    const pollScanStatus = async () => {
+      try {
+        const status = await scanApi.getGlobalStatus();
+        setScanStatus(status);
+      } catch {
+        // Ignore errors - just don't show indicator
+      }
+    };
+    
+    pollScanStatus();
+    const interval = setInterval(pollScanStatus, 2000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   const loadPhotos = async () => {
@@ -183,6 +201,17 @@ const PhotosView: React.FC = () => {
             <h1 className="text-3xl font-black text-light-text-primary dark:text-dark-text-primary tracking-tight">
               Memories
             </h1>
+            {/* Show scanning indicator when import/processing is happening */}
+            {scanStatus && (scanStatus.status === "scanning" || scanStatus.status === "indexing") && (
+              <div className="flex items-center gap-2 px-3 py-1 bg-brand-primary/10 rounded-full">
+                <Loader2 size={12} className="text-brand-primary animate-spin" />
+                <span className="text-xs font-medium text-brand-primary">
+                  {scanStatus.phase === "import" 
+                    ? `Importing ${scanStatus.imported_photos || 0} photos...` 
+                    : `Analyzing ${scanStatus.processed_photos}/${scanStatus.total_photos}...`}
+                </span>
+              </div>
+            )}
           </div>
           {!hasSelection && photos.length > 0 && (
             <button

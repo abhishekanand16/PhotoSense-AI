@@ -5,15 +5,19 @@ from fastapi import APIRouter, HTTPException
 from services.api.models import PhotoResponse, SearchRequest
 from services.ml.storage.sqlite_store import SQLiteStore
 from services.config import (
+    SEARCH_CLOTHING_KEYWORDS,
+    SEARCH_COLOR_KEYWORDS,
     SEARCH_GENERIC_TAGS,
     SEARCH_LOCATION_INDICATORS,
     SEARCH_MATCH_MULTIPLIERS,
     SEARCH_MIN_CONFIDENCE,
     SEARCH_OBJECT_KEYWORDS,
+    SEARCH_PERSON_INDICATORS,
     SEARCH_PET_KEYWORDS,
     SEARCH_SCENE_KEYWORDS,
     SEARCH_SCORE_WEIGHTS,
     SEARCH_SOURCE_WEIGHTS,
+    SEARCH_SYNONYMS,
 )
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -24,11 +28,13 @@ def detect_query_intent(query: str) -> Dict[str, float]:
     Returns boost multipliers for each source type.
     
     Intent types:
-    - person: boost face/person matches
+    - person: boost face/person matches (especially for named people)
     - location: boost location matches  
     - scene: boost Florence scene tags
     - object: boost YOLO object matches
     - pet: boost pet detections
+    - clothing: boost Florence (has clothing descriptions)
+    - color: boost CLIP (great for color understanding)
     """
     query_lower = query.lower().strip()
     query_words = set(query_lower.split())
@@ -42,14 +48,24 @@ def detect_query_intent(query: str) -> Dict[str, float]:
         "clip": 1.0,
     }
     
+    # Check for person-related indicators
+    person_indicators = query_words & SEARCH_PERSON_INDICATORS
+    if person_indicators:
+        boosts["person"] = 1.5
+    
     # Check for person name pattern (capitalized word not in common keywords)
     # Simple heuristic: if query has capitalized words that aren't scene/object keywords
     words = query.split()
-    potential_names = [w for w in words if w[0].isupper() and w.lower() not in SEARCH_SCENE_KEYWORDS 
-                       and w.lower() not in SEARCH_OBJECT_KEYWORDS and w.lower() not in SEARCH_PET_KEYWORDS
-                       and w.lower() not in SEARCH_LOCATION_INDICATORS and len(w) > 1]
+    potential_names = [w for w in words if len(w) > 1 and w[0].isupper() 
+                       and w.lower() not in SEARCH_SCENE_KEYWORDS 
+                       and w.lower() not in SEARCH_OBJECT_KEYWORDS 
+                       and w.lower() not in SEARCH_PET_KEYWORDS
+                       and w.lower() not in SEARCH_LOCATION_INDICATORS
+                       and w.lower() not in SEARCH_PERSON_INDICATORS
+                       and w.lower() not in SEARCH_CLOTHING_KEYWORDS
+                       and w.lower() not in SEARCH_COLOR_KEYWORDS]
     if potential_names:
-        boosts["person"] = 1.5  # Boost person/face matches
+        boosts["person"] = 1.8  # Strong boost for potential person names
     
     # Check for location indicators (words like "in", "at", "from" followed by capitalized word)
     if any(ind in query_lower for ind in SEARCH_LOCATION_INDICATORS):
@@ -71,6 +87,26 @@ def detect_query_intent(query: str) -> Dict[str, float]:
     if pet_matches:
         boosts["pet"] = 1.4
         boosts["object"] = 0.8  # Reduce object boost when looking for pets
+    
+    # Check for clothing keywords
+    # Florence-2 captions often describe clothing (e.g., "person wearing red dress")
+    clothing_matches = query_words & SEARCH_CLOTHING_KEYWORDS
+    if clothing_matches:
+        boosts["florence"] *= 1.5  # Florence is great at describing clothing
+        boosts["clip"] *= 1.3      # CLIP understands visual clothing concepts
+    
+    # Check for color keywords
+    # CLIP is excellent at understanding colors
+    color_matches = query_words & SEARCH_COLOR_KEYWORDS
+    if color_matches:
+        boosts["florence"] *= 1.4  # Florence captions often include colors
+        boosts["clip"] *= 1.5      # CLIP is excellent at color understanding
+    
+    # Check for combined clothing + color queries (e.g., "red dress", "blue shirt")
+    if clothing_matches and color_matches:
+        # Both present - strong boost for both sources
+        boosts["florence"] *= 1.2  # Additional boost for combined query
+        boosts["clip"] *= 1.2
     
     return boosts
 
@@ -123,6 +159,107 @@ def is_generic_only_match(matched_tags: List[str]) -> bool:
     return True
 
 
+def expand_query_with_synonyms(query: str) -> List[str]:
+    """
+    Expand query with synonyms for better partial matching.
+    
+    For example:
+    - "half moon" -> ["half moon", "crescent moon", "quarter moon", "gibbous moon"]
+    - "waxing moon" -> ["waxing moon", "waxing crescent", "waxing gibbous"]
+    
+    Returns list of search terms to use (original query + synonyms).
+    """
+    query_lower = query.lower().strip()
+    
+    # Start with original query
+    search_terms = [query_lower]
+    
+    # Check for exact synonym matches first
+    if query_lower in SEARCH_SYNONYMS:
+        search_terms.extend(SEARCH_SYNONYMS[query_lower])
+    
+    # Check for partial synonym matches (e.g., "blue moon" matches "moon")
+    for key, synonyms in SEARCH_SYNONYMS.items():
+        # If query contains the key as a substring, add synonyms
+        if key in query_lower and key != query_lower:
+            search_terms.extend(synonyms)
+        # If key contains the query as a substring, add synonyms
+        elif query_lower in key and key != query_lower:
+            search_terms.extend(synonyms)
+    
+    # Deduplicate while preserving order
+    seen = set()
+    unique_terms = []
+    for term in search_terms:
+        if term not in seen:
+            seen.add(term)
+            unique_terms.append(term)
+    
+    return unique_terms
+
+
+def search_by_people_name(store: SQLiteStore, query: str) -> Dict[int, Dict]:
+    """
+    Search for photos containing named people.
+    
+    Searches the people table for names matching the query,
+    then finds all photos containing those people.
+    
+    Examples:
+    - "John" matches photos with "John", "John Doe", "Johnny"
+    - "Sarah Smith" matches photos with "Sarah Smith"
+    """
+    results = {}
+    query_lower = query.lower().strip()
+    query_words = set(query_lower.split())
+    
+    # Search for people matching the query
+    people_matches = store.search_people_by_name(query)
+    
+    for person in people_matches:
+        person_id = person["id"]
+        person_name = person["name"]
+        match_type = person["match_type"]
+        
+        # Get all photos containing this person
+        photo_ids = store.get_photo_ids_for_person(person_id)
+        
+        for photo_id in photo_ids:
+            if photo_id not in results:
+                results[photo_id] = {
+                    "person_matches": [],
+                    "matched_tags": [],
+                    "match_type": None,
+                    "best_score": 0.0,
+                    "has_exact_match": False,
+                }
+            
+            # Calculate match score
+            if match_type == "exact":
+                score = 1.0
+            elif match_type == "partial":
+                score = 0.8
+            else:
+                score = 0.6
+            
+            results[photo_id]["person_matches"].append({
+                "person_id": person_id,
+                "name": person_name,
+                "match_type": match_type,
+                "score": score,
+            })
+            results[photo_id]["matched_tags"].append(person_name)
+            
+            if match_type == "exact":
+                results[photo_id]["has_exact_match"] = True
+            
+            if score > results[photo_id]["best_score"]:
+                results[photo_id]["best_score"] = score
+                results[photo_id]["match_type"] = match_type
+    
+    return results
+
+
 def search_by_florence_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
     """
     PRIMARY SEARCH: Use Florence-2 rich tags stored in scenes table.
@@ -133,18 +270,35 @@ def search_by_florence_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
     - "person walking on beach"
     
     This searches those tags directly with confidence threshold pruning.
+    Now includes synonym expansion for better partial matching
+    (e.g., "half moon" also searches for "crescent moon", "quarter moon").
     """
     results = {}
     query_lower = query.lower().strip()
     query_words = set(query_lower.split())
     
-    # Search scenes table (contains Florence-2 tags)
-    scene_matches = store.search_scenes_by_text(
-        query, 
-        min_confidence=0.1  # Get all matches, filter by threshold below
-    )
+    # Expand query with synonyms for better partial matching
+    search_terms = expand_query_with_synonyms(query)
     
-    for match in scene_matches:
+    # Search for each term and combine results
+    all_scene_matches = []
+    for term in search_terms:
+        scene_matches = store.search_scenes_by_text(
+            term, 
+            min_confidence=0.1  # Get all matches, filter by threshold below
+        )
+        all_scene_matches.extend(scene_matches)
+    
+    # Deduplicate matches by (photo_id, scene_label)
+    seen = set()
+    unique_matches = []
+    for match in all_scene_matches:
+        key = (match["photo_id"], match["scene_label"])
+        if key not in seen:
+            seen.add(key)
+            unique_matches.append(match)
+    
+    for match in unique_matches:
         photo_id = match["photo_id"]
         tag = match["scene_label"].lower()
         confidence = match["confidence"]
@@ -162,10 +316,13 @@ def search_by_florence_tags(store: SQLiteStore, query: str) -> Dict[int, Dict]:
                 "has_exact_match": False,
             }
         
-        # Determine match quality
+        # Determine match quality - check against original query and all search terms
         if query_lower == tag:
             match_type = "exact"
         elif query_lower in tag:
+            match_type = "partial"
+        elif any(term in tag for term in search_terms if term != query_lower):
+            # Synonym match - treat as partial
             match_type = "partial"
         elif query_words & set(tag.split()):
             match_type = "word"
@@ -437,6 +594,7 @@ def calculate_final_score(
     clip_similarity: float,
     location_data: Dict = None,
     custom_tag_data: Dict = None,
+    person_data: Dict = None,
     intent_boosts: Dict[str, float] = None,
     query: str = "",
 ) -> Tuple[float, Dict]:
@@ -451,10 +609,11 @@ def calculate_final_score(
     
     Priority:
     1. Custom user tags (HIGHEST - explicit user intent)
-    2. Florence-2 exact/partial matches (high weight)
-    3. Location matches (high weight for place-based searches)
-    4. Object/Pet detections  
-    5. CLIP semantic similarity (important for visual concepts)
+    2. Named people matches (HIGH - user assigned names)
+    3. Florence-2 exact/partial matches (high weight)
+    4. Location matches (high weight for place-based searches)
+    5. Object/Pet detections  
+    6. CLIP semantic similarity (important for visual concepts)
     Returns:
         Tuple of (score, match_info dict for debugging)
     """
@@ -474,6 +633,24 @@ def calculate_final_score(
                 score += SEARCH_SCORE_WEIGHTS["custom_tag_exact"] * match["score"]
             else:
                 score += SEARCH_SCORE_WEIGHTS["custom_tag_partial"] * match["score"]
+    
+    # ==================================================================
+    # Named people matches (HIGH PRIORITY - user assigned names)
+    # ==================================================================
+    if person_data and person_data.get("person_matches"):
+        person_score = 0.0
+        for match in person_data.get("person_matches", []):
+            multiplier = SEARCH_MATCH_MULTIPLIERS.get(match["match_type"], 0.25)
+            person_score += match["score"] * multiplier
+        
+        # Apply source weight and intent boost
+        person_score *= SEARCH_SOURCE_WEIGHTS["person"] * intent_boosts.get("person", 1.0)
+        source_scores["person"] = person_score
+        matched_sources.append("person")
+        all_matched_tags.extend(person_data.get("matched_tags", []))
+        
+        if person_data.get("has_exact_match"):
+            has_exact_match = True
     
     # Florence-2 tag matches (PRIMARY)
     # ==================================================================
@@ -629,16 +806,22 @@ async def search_photos(request: SearchRequest):
         logging.debug(f"Search query: '{query}'")
         
         # ==================================================================
+        # STEP 0: Detect query intent for boosting
+        # ==================================================================
+        intent_boosts = detect_query_intent(query)
+        logging.debug(f"Intent boosts: {intent_boosts}")
+        
+        # ==================================================================
         # STEP 1: Search custom user tags (HIGHEST PRIORITY)
         # ==================================================================
         custom_tag_results = search_by_custom_tags(store, query)
         logging.debug(f"Custom tag matches: {len(custom_tag_results)} photos")
         
         # ==================================================================
-        # STEP 0: Detect query intent for boosting
+        # STEP 1.5: Search named people (HIGH PRIORITY)
         # ==================================================================
-        intent_boosts = detect_query_intent(query)
-        logging.debug(f"Intent boosts: {intent_boosts}")
+        person_results = search_by_people_name(store, query)
+        logging.debug(f"Person name matches: {len(person_results)} photos")
         
         # ==================================================================
         # STEP 2: Search Florence-2 tags (PRIMARY SOURCE)
@@ -668,6 +851,7 @@ async def search_photos(request: SearchRequest):
         
         tag_candidate_ids = (
             set(custom_tag_results.keys()) |
+            set(person_results.keys()) |
             set(florence_results.keys()) | 
             set(location_results.keys()) |
             set(object_results.keys()) | 
@@ -719,6 +903,7 @@ async def search_photos(request: SearchRequest):
                 continue
             
             custom_tag_data = custom_tag_results.get(photo_id)
+            person_data = person_results.get(photo_id)
             florence_data = florence_results.get(photo_id)
             location_data = location_results.get(photo_id)
             object_data = object_results.get(photo_id)
@@ -733,6 +918,7 @@ async def search_photos(request: SearchRequest):
                 clip_similarity=clip_sim,
                 location_data=location_data,
                 custom_tag_data=custom_tag_data,
+                person_data=person_data,
                 intent_boosts=intent_boosts,
                 query=query,
             )
@@ -747,6 +933,8 @@ async def search_photos(request: SearchRequest):
             matches = []
             if custom_tag_data and custom_tag_data.get("tag_matches"):
                 matches.append(f"custom_tags:{len(custom_tag_data['tag_matches'])}")
+            if person_data and person_data.get("person_matches"):
+                matches.append(f"people:{len(person_data['person_matches'])}")
             if florence_data and florence_data.get("florence_matches"):
                 matches.append(f"florence:{len(florence_data['florence_matches'])}")
             if location_data and location_data.get("location_matches"):

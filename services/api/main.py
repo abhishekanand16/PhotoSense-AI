@@ -28,7 +28,7 @@ _set_default_env("TOKENIZERS_PARALLELISM", "false")
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from services.api.routes import faces, objects, people, pets, photos, places, scan, scenes, search, stats, tags
+from services.api.routes import faces, models, objects, people, pets, photos, places, scan, scenes, search, stats, tags
 
 app = FastAPI(
     title="PhotoSense-AI API",
@@ -57,6 +57,7 @@ app.include_router(objects.router)
 app.include_router(scenes.router)
 app.include_router(stats.router)
 app.include_router(tags.router)
+app.include_router(models.router)
 
 
 @app.get("/")

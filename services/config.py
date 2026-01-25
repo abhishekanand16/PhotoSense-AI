@@ -212,3 +212,84 @@ SEARCH_PET_KEYWORDS: Set[str] = {
 SEARCH_LOCATION_INDICATORS: Set[str] = {
     "in", "at", "from", "near", "around",
 }
+
+# Person name indicators for intent detection
+SEARCH_PERSON_INDICATORS: Set[str] = {
+    "person", "people", "who", "name", "named",
+}
+
+# Search term synonyms for partial matching (query -> list of search terms)
+# These expand the user's query to find more relevant results
+SEARCH_SYNONYMS: Dict[str, list] = {
+    # Moon phases - expand to common Florence-2 labels
+    "moon": ["moon", "crescent moon", "full moon", "half moon", "lunar", "moonlight", "moonrise", "moonset"],
+    "half moon": ["half moon", "crescent moon", "quarter moon", "gibbous moon"],
+    "waxing moon": ["waxing moon", "waxing crescent", "waxing gibbous", "crescent moon"],
+    "waning moon": ["waning moon", "waning crescent", "waning gibbous", "crescent moon"],
+    "full moon": ["full moon", "bright moon", "moon"],
+    "new moon": ["new moon", "dark moon", "moonless"],
+    "crescent moon": ["crescent moon", "crescent", "waxing crescent", "waning crescent"],
+    "gibbous moon": ["gibbous moon", "gibbous", "waxing gibbous", "waning gibbous"],
+    
+    # Weather/sky conditions
+    "cloudy": ["cloudy", "clouds", "overcast", "cloud"],
+    "sunny": ["sunny", "sunshine", "bright sky", "clear sky"],
+    "rainy": ["rainy", "rain", "raining", "wet"],
+    "stormy": ["stormy", "storm", "thunderstorm", "lightning"],
+    
+    # Time of day
+    "golden hour": ["golden hour", "sunset", "sunrise", "golden light"],
+    "blue hour": ["blue hour", "twilight", "dusk", "dawn"],
+    "night": ["night", "nighttime", "night sky", "dark"],
+    "evening": ["evening", "dusk", "sunset", "twilight"],
+    
+    # Clothing - expand to common terms Florence-2 might use
+    "dress": ["dress", "gown", "frock", "outfit", "wearing dress", "long dress", "short dress"],
+    "shirt": ["shirt", "blouse", "top", "t-shirt", "tee", "polo", "button-up", "wearing shirt"],
+    "pants": ["pants", "trousers", "jeans", "slacks", "leggings", "wearing pants"],
+    "jacket": ["jacket", "coat", "blazer", "hoodie", "sweater", "cardigan", "wearing jacket"],
+    "suit": ["suit", "formal wear", "business attire", "tuxedo", "blazer", "wearing suit"],
+    "skirt": ["skirt", "mini skirt", "long skirt", "wearing skirt"],
+    "shorts": ["shorts", "short pants", "wearing shorts"],
+    "casual": ["casual", "t-shirt", "jeans", "relaxed", "casual wear", "casual outfit"],
+    "formal": ["formal", "suit", "dress", "gown", "elegant", "formal wear", "formal attire"],
+    "sportswear": ["sportswear", "athletic", "gym clothes", "workout", "sports outfit"],
+    "swimwear": ["swimwear", "swimsuit", "bikini", "swimming", "beach wear"],
+    
+    # Colors - expand to variations and shades
+    "red": ["red", "crimson", "scarlet", "maroon", "burgundy", "ruby", "cherry"],
+    "blue": ["blue", "navy", "azure", "cobalt", "turquoise", "cyan", "sky blue", "royal blue"],
+    "green": ["green", "emerald", "olive", "lime", "teal", "mint", "forest green"],
+    "yellow": ["yellow", "gold", "golden", "amber", "mustard", "lemon"],
+    "black": ["black", "dark", "ebony", "charcoal", "jet black"],
+    "white": ["white", "ivory", "cream", "bright", "snow white", "off-white"],
+    "pink": ["pink", "rose", "magenta", "fuchsia", "salmon", "coral pink"],
+    "purple": ["purple", "violet", "lavender", "plum", "magenta", "lilac"],
+    "orange": ["orange", "tangerine", "coral", "peach", "apricot", "rust"],
+    "brown": ["brown", "tan", "beige", "chocolate", "bronze", "caramel", "coffee"],
+    "gray": ["gray", "grey", "silver", "charcoal", "slate", "ash"],
+    "grey": ["gray", "grey", "silver", "charcoal", "slate", "ash"],
+    
+    # Combined clothing + color terms
+    "red dress": ["red dress", "crimson dress", "scarlet dress", "wearing red"],
+    "blue shirt": ["blue shirt", "navy shirt", "wearing blue"],
+    "black suit": ["black suit", "dark suit", "formal black"],
+    "white dress": ["white dress", "ivory dress", "cream dress", "wedding dress"],
+}
+
+# Clothing-related keywords for intent detection
+SEARCH_CLOTHING_KEYWORDS: Set[str] = {
+    "dress", "shirt", "pants", "jacket", "coat", "suit", "jeans", "skirt",
+    "blouse", "sweater", "hoodie", "shorts", "top", "outfit", "clothes",
+    "clothing", "attire", "casual", "formal", "wearing", "wore", "worn",
+    "t-shirt", "tee", "blazer", "cardigan", "leggings", "sportswear",
+    "swimwear", "swimsuit", "bikini", "uniform", "costume",
+}
+
+# Color keywords for intent detection
+SEARCH_COLOR_KEYWORDS: Set[str] = {
+    "red", "blue", "green", "yellow", "black", "white", "pink", "purple",
+    "orange", "brown", "gray", "grey", "silver", "gold", "golden", "navy",
+    "turquoise", "teal", "maroon", "burgundy", "beige", "tan", "cream",
+    "coral", "violet", "lavender", "crimson", "scarlet", "colorful",
+}

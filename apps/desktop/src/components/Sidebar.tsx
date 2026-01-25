@@ -8,7 +8,8 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  LayoutDashboard
+  LayoutDashboard,
+  HelpCircle
 } from "lucide-react";
 
 interface SidebarProps {
@@ -51,6 +52,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
     { id: "objects", label: "Objects", icon: Box, count: null },
     { id: "places", label: "Places", icon: MapPin, count: stats?.total_locations ?? 0 },
     { id: "search", label: "Search", icon: Search, count: null },
+    { id: "help", label: "Help & FAQ", icon: HelpCircle, count: null },
     { id: "settings", label: "Settings", icon: Settings, count: null },
   ];
 

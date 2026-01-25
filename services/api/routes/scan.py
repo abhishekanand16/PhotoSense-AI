@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterator, Optional, Set
@@ -15,6 +16,10 @@ from services.config import SCAN_BATCH_SIZE, STATE_DIR
 from services.ml.utils.path_utils import validate_folder_path as _validate_folder_path
 
 router = APIRouter(prefix="/scan", tags=["scan"])
+
+# Thread pool for CPU-bound ML operations
+# Using 2 workers to avoid overwhelming CPU while allowing some parallelism
+_ml_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ml_worker")
 
 _jobs: Dict[str, Dict] = {}
 _jobs_lock = threading.Lock()
@@ -29,6 +34,9 @@ _global_scan_state: Dict = {
     "message": "Ready",
     "current_job_id": None,
     "error": None,
+    # New fields to allow browsing during scanning
+    "phase": None,  # "import", "processing", "clustering", "complete"
+    "imported_photos": 0,  # Number of photos already imported (viewable)
 }
 _global_state_lock = threading.Lock()
 
@@ -84,6 +92,8 @@ def _reset_global_state() -> None:
             "message": "Ready",
             "current_job_id": None,
             "error": None,
+            "phase": None,
+            "imported_photos": 0,
         })
 
 
@@ -143,6 +153,19 @@ def _iter_image_paths(folder: Path, recursive: bool, image_extensions: Set[str])
 
 
 async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
+    """
+    Process a folder with fully decoupled import and ML phases.
+    
+    ARCHITECTURE:
+    - Phase 1 (Import): Fast, runs blocking EXIF extraction in thread pool
+      - Photos visible in dashboard immediately after import
+      - Uses import_photo_metadata_only_sync() in thread pool
+    - Phase 2 (ML): Runs ALL ML operations in thread pool
+      - Uses process_photo_ml_sync() in thread pool  
+      - Never blocks the event loop
+      - API stays responsive throughout
+    - Phase 3 (Clustering): Face clustering in thread pool
+    """
     _update_job(job_id, status="processing", progress=0.0, message="Scanning folder...", phase="import")
     _update_global_state(
         status="scanning",
@@ -154,10 +177,13 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
         message="Scanning folder...",
         current_job_id=job_id,
         error=None,
+        phase="import",
+        imported_photos=0,
     )
 
     from services.ml.pipeline import MLPipeline
     pipeline = MLPipeline()
+    loop = asyncio.get_event_loop()
 
     try:
         try:
@@ -193,10 +219,6 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             ".sr", ".ras",
             ".pic",
         }
-        if recursive:
-            image_paths = [str(p) for p in folder.rglob("*") if p.suffix.lower() in image_extensions]
-        else:
-            image_paths = [str(p) for p in folder.iterdir() if p.suffix.lower() in image_extensions]
 
         # Pass A: count images (streaming, no list allocation)
         total = 0
@@ -213,12 +235,20 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             _update_global_state(status="completed", message="No photos to scan", processed_photos=0, progress_percent=100, eta_seconds=0)
             return
 
+        # =====================================================================
+        # PHASE 1: FAST IMPORT (runs in thread pool, API stays responsive)
+        # =====================================================================
         _update_job(job_id, phase="import")
         imported_photos = []
         
         for idx, image_path in enumerate(_iter_image_paths(folder, recursive, image_extensions)):
             try:
-                result = await pipeline.import_photo(image_path)
+                # Run import in thread pool - EXIF extraction is blocking
+                result = await loop.run_in_executor(
+                    _ml_executor,
+                    pipeline.import_photo_metadata_only_sync,
+                    image_path
+                )
                 if result.get("status") in ["imported", "exists"]:
                     photo_id = result.get("photo_id")
                     if photo_id:
@@ -226,6 +256,7 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             except Exception as e:
                 logging.error(f"Failed to import {image_path}: {str(e)}")
 
+            # Update progress frequently and yield to event loop
             progress = (idx + 1) / total * 0.5 if total > 0 else 0.5
             msg = f"Importing photos... {idx + 1}/{total}"
             eta_seconds = _compute_eta_seconds(_get_global_state().get("started_at"), idx + 1, total)
@@ -235,24 +266,47 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
                 message=msg,
                 progress_percent=int(progress * 100),
                 eta_seconds=eta_seconds,
+                phase="import",
+                imported_photos=len(imported_photos),
             )
-            await asyncio.sleep(0)
+            
+            # Yield every 5 photos to keep API responsive
+            if (idx + 1) % 5 == 0:
+                await asyncio.sleep(0)
 
         msg = f"Import complete: {len(imported_photos)} photos ready. Starting AI analysis..."
         _update_job(job_id, message=msg, phase="scanning")
-        _update_global_state(status="indexing", processed_photos=0, message=msg, progress_percent=50, eta_seconds=None)
+        _update_global_state(
+            status="indexing", 
+            processed_photos=0, 
+            message=msg, 
+            progress_percent=50, 
+            eta_seconds=None,
+            phase="processing",
+            imported_photos=len(imported_photos),
+        )
 
+        # =====================================================================
+        # PHASE 2: ML PROCESSING (runs in thread pool, API stays responsive)
+        # =====================================================================
         processed = 0
         total_faces = 0
         total_objects = 0
         total_to_process = len(imported_photos)
+        
         for batch_start in range(0, total_to_process, SCAN_BATCH_SIZE):
             batch_end = min(batch_start + SCAN_BATCH_SIZE, total_to_process)
             batch = imported_photos[batch_start:batch_end]
             
             for photo_id, image_path in batch:
                 try:
-                    result = await pipeline.process_photo_ml(photo_id, image_path)
+                    # Run ALL ML in thread pool - this is the key change
+                    result = await loop.run_in_executor(
+                        _ml_executor,
+                        pipeline.process_photo_ml_sync,
+                        photo_id,
+                        image_path
+                    )
                     processed += 1
                     faces_found = len(result.get("faces", []))
                     objects_found = len(result.get("objects", []))
@@ -260,8 +314,9 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
                     total_objects += objects_found
                 except Exception as e:
                     logging.error(f"Failed to process ML for {image_path}: {str(e)}", exc_info=True)
+                    processed += 1  # Count as processed to avoid infinite loop
                 
-                # Update progress after each photo and yield to allow status endpoint to respond
+                # Update progress after each photo
                 progress = 0.5 + (processed / total_to_process) * 0.5 if total_to_process > 0 else 1.0
                 msg = f"Analyzing photos... {processed}/{total_to_process}"
                 eta_seconds = _compute_eta_seconds(_get_global_state().get("started_at"), processed, total_to_process)
@@ -272,13 +327,23 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
                     message=msg,
                     progress_percent=int(progress * 100),
                     eta_seconds=eta_seconds,
+                    phase="processing",
+                    imported_photos=total_to_process,
                 )
+                
+                # Yield to event loop to keep API responsive
                 await asyncio.sleep(0)
 
-            pipeline.index.save_all_dirty()
+            # Save FAISS indices after each batch (in thread pool)
+            await loop.run_in_executor(None, pipeline.index.save_all_dirty)
 
+        # =====================================================================
+        # PHASE 3: FACE CLUSTERING (runs in thread pool)
+        # =====================================================================
         _update_job(job_id, message="Organizing faces...")
-        _update_global_state(message="Organizing faces...")
+        _update_global_state(message="Organizing faces...", phase="clustering")
+        
+        # Run clustering in thread pool
         cluster_result = await pipeline.cluster_faces()
         
         clusters = cluster_result.get("clusters", 0)
@@ -297,6 +362,8 @@ async def process_folder_async(folder_path: str, recursive: bool, job_id: str):
             message=final_msg,
             progress_percent=100,
             eta_seconds=0,
+            phase="complete",
+            imported_photos=total_to_process,
         )
         logging.info(f"Scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 
@@ -354,6 +421,8 @@ async def get_global_scan_status():
         started_at=state.get("started_at"),
         eta_seconds=state.get("eta_seconds"),
         error=state.get("error"),
+        phase=state.get("phase"),
+        imported_photos=state.get("imported_photos", 0),
     )
 
 
@@ -373,6 +442,10 @@ async def get_job_status(job_id: str):
 
 
 async def scan_faces_async(job_id: str):
+    """
+    Re-scan all photos for faces and other ML features.
+    Uses thread pool for all ML operations to keep API responsive.
+    """
     _update_job(job_id, status="processing", progress=0.0, message="Loading photos...", phase="scanning")
     _update_global_state(
         status="scanning",
@@ -384,6 +457,8 @@ async def scan_faces_async(job_id: str):
         message="Loading photos...",
         current_job_id=job_id,
         error=None,
+        phase="processing",
+        imported_photos=0,
     )
 
     from services.ml.pipeline import MLPipeline
@@ -391,9 +466,11 @@ async def scan_faces_async(job_id: str):
     
     pipeline = MLPipeline()
     store = SQLiteStore()
+    loop = asyncio.get_event_loop()
 
     try:
-        photos = store.get_all_photos()
+        # Get photos in thread pool to avoid blocking
+        photos = await loop.run_in_executor(None, store.get_all_photos)
         total = len(photos)
         
         if total == 0:
@@ -402,11 +479,18 @@ async def scan_faces_async(job_id: str):
             return
 
         _update_job(job_id, message=f"Found {total} photos to scan")
-        _update_global_state(total_photos=total, processed_photos=0, message=f"Found {total} photos to scan", progress_percent=0)
+        _update_global_state(
+            total_photos=total, 
+            processed_photos=0, 
+            message=f"Found {total} photos to scan", 
+            progress_percent=0,
+            imported_photos=total,
+        )
         
         processed = 0
         total_faces = 0
         total_objects = 0
+        
         for idx, photo in enumerate(photos):
             try:
                 photo_id = photo["id"]
@@ -416,7 +500,13 @@ async def scan_faces_async(job_id: str):
                     logging.warning(f"Photo file not found: {photo_path}")
                     continue
                 
-                result = await pipeline.process_photo_ml(photo_id, photo_path)
+                # Run ML in thread pool - key change for responsiveness
+                result = await loop.run_in_executor(
+                    _ml_executor,
+                    pipeline.process_photo_ml_sync,
+                    photo_id,
+                    photo_path
+                )
                 processed += 1
                 faces_found = len(result.get("faces", []))
                 objects_found = len(result.get("objects", []))
@@ -429,10 +519,20 @@ async def scan_faces_async(job_id: str):
             msg = f"Scanning faces... {idx + 1}/{total}"
             eta_seconds = _compute_eta_seconds(_get_global_state().get("started_at"), idx + 1, total)
             _update_job(job_id, progress=progress, message=msg)
-            _update_global_state(processed_photos=idx + 1, message=msg, progress_percent=int(progress * 100), eta_seconds=eta_seconds)
+            _update_global_state(
+                processed_photos=idx + 1, 
+                message=msg, 
+                progress_percent=int(progress * 100), 
+                eta_seconds=eta_seconds,
+                phase="processing",
+                imported_photos=total,
+            )
+            
+            # Yield to event loop
+            await asyncio.sleep(0)
 
         _update_job(job_id, message="Organizing faces...")
-        _update_global_state(status="indexing", message="Organizing faces...", eta_seconds=None)
+        _update_global_state(status="indexing", message="Organizing faces...", eta_seconds=None, phase="clustering")
         cluster_result = await pipeline.cluster_faces()
 
         clusters = cluster_result.get("clusters", 0)
@@ -450,6 +550,8 @@ async def scan_faces_async(job_id: str):
             message=final_msg,
             progress_percent=100,
             eta_seconds=0,
+            phase="complete",
+            imported_photos=total,
         )
         logging.info(f"Face scan complete: {processed} photos, {total_faces} faces, {total_objects} objects, {clusters} clusters")
 
