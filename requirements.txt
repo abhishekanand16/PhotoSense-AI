@@ -34,3 +34,6 @@ faiss-cpu>=1.13.2
 scikit-learn>=1.8.0
 # Optional: hdbscan (better than DBSCAN for face clustering)
 # pip install hdbscan
+
+# PhotoSense-AI - https://github.com/abhishekanand16/PhotoSense-AI
+# Copyright (c) 2026 Abhishek Anand. Licensed under AGPL-3.0.
