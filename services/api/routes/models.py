@@ -5,6 +5,7 @@ Provides real-time visibility into model download/load status for first-time set
 """
 
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -52,7 +53,11 @@ async def get_models_status():
     
     Returns overall progress and individual model statuses.
     Used by frontend to show first-time setup progress.
+    
+    NOTE: Automatically starts model initialization on first call if models aren't ready.
     """
+    global _auto_init_started
+    
     tracker = get_model_tracker()
     overall = tracker.get_overall_progress()
     models = tracker.get_all_status()

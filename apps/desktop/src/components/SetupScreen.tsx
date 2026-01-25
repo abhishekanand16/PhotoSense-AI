@@ -12,6 +12,23 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete }) => {
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
+    // Trigger initialization immediately on mount
+    const startInit = async () => {
+      try {
+        await modelsApi.initialize();
+        setInitialized(true);
+      } catch {
+        // Initialization might already be running, that's OK
+        setInitialized(true);
+      }
+    };
+    
+    if (!initialized) {
+      startInit();
+    }
+  }, [initialized]);
+
+  useEffect(() => {
     // Start polling for model status
     const pollStatus = async () => {
       try {
@@ -26,18 +43,9 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete }) => {
             onComplete();
           }, 1000);
         }
-      } catch (err) {
+      } catch {
         // If we can't connect, that's expected during first startup
-        // Backend might be initializing
-        if (!initialized) {
-          // Try to initialize models
-          try {
-            await modelsApi.initialize();
-            setInitialized(true);
-          } catch {
-            // Ignore initialization errors
-          }
-        }
+        // Backend might be initializing - just keep polling
       }
     };
 
@@ -45,7 +53,7 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete }) => {
     const interval = setInterval(pollStatus, 1500);
 
     return () => clearInterval(interval);
-  }, [onComplete, initialized]);
+  }, [onComplete]);
 
   const getStatusIcon = (modelStatus: ModelStatus) => {
     switch (modelStatus.status) {

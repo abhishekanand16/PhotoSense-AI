@@ -48,27 +48,27 @@ class ModelStatusTracker:
     MODEL_DEFINITIONS = {
         "insightface": ModelInfo(
             name="insightface",
-            display_name="Face Detection (InsightFace)",
+            display_name="Face Detection",
             size_mb=500,
         ),
         "yolo": ModelInfo(
             name="yolo",
-            display_name="Object Detection (YOLO)",
+            display_name="Object Detection",
             size_mb=6,
         ),
         "places365": ModelInfo(
             name="places365",
-            display_name="Scene Recognition (Places365)",
+            display_name="Scene Recognition",
             size_mb=200,
         ),
         "clip": ModelInfo(
             name="clip",
-            display_name="Visual Search (CLIP)",
+            display_name="Visual Search",
             size_mb=890,
         ),
         "florence": ModelInfo(
             name="florence",
-            display_name="Image Understanding (Florence-2)",
+            display_name="Image Understanding",
             size_mb=990,
         ),
     }
