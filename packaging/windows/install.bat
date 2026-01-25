@@ -2,49 +2,49 @@
 setlocal enabledelayedexpansion
 
 :: ============================================================
-:: PhotoSense-AI Windows Installer Builder
-:: ============================================================
-:: Double-click this file to build the Windows installer.
-:: Automatically installs missing prerequisites.
+:: PhotoSense-AI Windows Installer
+:: Complete automated build system
 :: ============================================================
 
-title PhotoSense-AI Installer Builder
-color 0B
+title PhotoSense-AI Installer
 
 echo.
-echo   ================================================================
-echo   ^|                                                              ^|
-echo   ^|           PhotoSense-AI Windows Installer                    ^|
-echo   ^|                    Version 1.0.0                             ^|
-echo   ^|                                                              ^|
-echo   ================================================================
+echo   ============================================================
+echo   PhotoSense-AI Windows Installer
+echo   ============================================================
 echo.
+echo   This will build a complete Windows installer for PhotoSense-AI.
+echo   Estimated time: 30-60 minutes on first run.
+echo.
+echo   The installer will automatically:
+echo   - Install Python, Node.js, Rust, and VS Build Tools if needed
+echo   - Build the Python backend
+echo   - Build the Tauri frontend
+echo   - Create PhotoSense-AI-1.0.0-Setup.exe
+echo.
+pause
 
 :: Get script directory
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
-:: Get project root (two levels up)
-for %%I in ("%SCRIPT_DIR%\..\.." ) do set "PROJECT_ROOT=%%~fI"
-
-echo   Project: %PROJECT_ROOT%
+:: ============================================================
+:: STEP 1: Check and Install Prerequisites
+:: ============================================================
+echo.
+echo   ============================================================
+echo   STEP 1: CHECKING PREREQUISITES
+echo   ============================================================
 echo.
 
-:: ============================================================
-:: Check and Install Prerequisites
-:: ============================================================
-echo   ================================================================
-echo   CHECKING PREREQUISITES
-echo   ================================================================
-echo.
+:: ------------------------------------------------------------
+:: Python Check
+:: ------------------------------------------------------------
+echo   [1/4] Checking Python...
 
-:: ============================================================
-:: Check/Install Python (check known paths FIRST to avoid Windows Store alias)
-:: ============================================================
-echo   [1/3] Python 3.10+...
 set "PYTHON_EXE="
 
-:: Check common installation locations FIRST
+:: Check known locations first
 for %%P in (
     "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
@@ -54,261 +54,225 @@ for %%P in (
     "C:\Python312\python.exe"
     "C:\Python311\python.exe"
     "C:\Python310\python.exe"
-    "%ProgramFiles%\Python313\python.exe"
-    "%ProgramFiles%\Python312\python.exe"
-    "%ProgramFiles%\Python311\python.exe"
-    "%ProgramFiles%\Python310\python.exe"
 ) do (
     if exist "%%~P" (
         set "PYTHON_EXE=%%~P"
-        for /f "tokens=*" %%V in ('"%%~P" --version 2^>^&1') do echo          Found: %%V
-        goto :python_found
+        for /f "tokens=*" %%V in ('"%%~P" --version 2^>^&1') do echo          %%V found
+        goto :python_ok
     )
 )
 
-:: Check if python in PATH actually works (test it, don't trust "where")
-python -c "import sys; print(f'Python {sys.version_info.major}.{sys.version_info.minor}')" >nul 2>nul
+:: Check PATH
+python --version >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     set "PYTHON_EXE=python"
-    for /f "tokens=*" %%V in ('python --version 2^>^&1') do echo          Found: %%V
-    goto :python_found
+    for /f "tokens=*" %%V in ('python --version 2^>^&1') do echo          %%V found
+    goto :python_ok
 )
 
-:: Python not found - install it
-echo          Python not found. Installing automatically...
-echo.
-
+:: Install Python
+echo          Not found. Installing Python 3.12...
 where winget >nul 2>nul
 if %ERRORLEVEL% equ 0 (
-    echo          Installing Python via winget...
-    winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
-    if %ERRORLEVEL% equ 0 (
-        echo          Python installed successfully!
-        set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-        set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
-        timeout /t 3 >nul
-        goto :python_found
-    )
-)
-
-:: Try downloading installer
-echo          Downloading Python installer...
-set "PY_INSTALLER=%TEMP%\python_installer.exe"
-curl -L -o "%PY_INSTALLER%" "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe" 2>nul
-if exist "%PY_INSTALLER%" (
-    echo          Running Python installer...
-    "%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
-    timeout /t 15 >nul
-    del "%PY_INSTALLER%" 2>nul
+    winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+    timeout /t 5 >nul
     set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
     set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
-    if exist "!PYTHON_EXE!" (
-        echo          Python installed successfully!
-        goto :python_found
-    )
+) else (
+    echo          ERROR: winget not found. Please install Python manually from python.org
+    pause
+    exit /b 1
 )
 
-echo          ERROR: Could not install Python automatically.
-echo          Please install from https://www.python.org/downloads/
-pause
-exit /b 1
+:python_ok
 
-:python_found
+:: ------------------------------------------------------------
+:: Node.js Check
+:: ------------------------------------------------------------
+echo   [2/4] Checking Node.js...
 
-:: ============================================================
-:: Check/Install Node.js
-:: ============================================================
-echo   [2/3] Node.js 18+...
 set "NODE_EXE="
 
-:: Check common locations first
 if exist "%ProgramFiles%\nodejs\node.exe" (
     set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
-    for /f "tokens=*" %%V in ('"%ProgramFiles%\nodejs\node.exe" --version 2^>^&1') do echo          Found: Node.js %%V
-    goto :node_found
+    for /f "tokens=*" %%V in ('"%ProgramFiles%\nodejs\node.exe" --version 2^>^&1') do echo          %%V found
+    goto :node_ok
 )
 
-:: Check if node in PATH works
 node --version >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     set "NODE_EXE=node"
-    for /f "tokens=*" %%V in ('node --version 2^>^&1') do echo          Found: Node.js %%V
-    goto :node_found
+    for /f "tokens=*" %%V in ('node --version 2^>^&1') do echo          %%V found
+    goto :node_ok
 )
 
-:: Node.js not found - install it
-echo          Node.js not found. Installing automatically...
-echo.
-
+:: Install Node.js
+echo          Not found. Installing Node.js LTS...
 where winget >nul 2>nul
 if %ERRORLEVEL% equ 0 (
-    echo          Installing Node.js via winget...
-    winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
-    if %ERRORLEVEL% equ 0 (
-        echo          Node.js installed successfully!
-        set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
-        set "PATH=%ProgramFiles%\nodejs;%PATH%"
-        timeout /t 3 >nul
-        goto :node_found
-    )
-)
-
-:: Try downloading installer
-echo          Downloading Node.js installer...
-set "NODE_INSTALLER=%TEMP%\node_installer.msi"
-curl -L -o "%NODE_INSTALLER%" "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" 2>nul
-if exist "%NODE_INSTALLER%" (
-    echo          Running Node.js installer...
-    msiexec /i "%NODE_INSTALLER%" /quiet /norestart
-    timeout /t 10 >nul
-    del "%NODE_INSTALLER%" 2>nul
+    winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+    timeout /t 5 >nul
     set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
     set "PATH=%ProgramFiles%\nodejs;%PATH%"
-    if exist "!NODE_EXE!" (
-        echo          Node.js installed successfully!
-        goto :node_found
-    )
+) else (
+    echo          ERROR: winget not found. Please install Node.js manually from nodejs.org
+    pause
+    exit /b 1
 )
 
-echo          ERROR: Could not install Node.js automatically.
-echo          Please install from https://nodejs.org/
-pause
-exit /b 1
+:node_ok
 
-:node_found
+:: ------------------------------------------------------------
+:: Rust Check
+:: ------------------------------------------------------------
+echo   [3/4] Checking Rust...
 
-:: ============================================================
-:: Check/Install Rust
-:: ============================================================
-echo   [3/3] Rust (cargo)...
 set "CARGO_EXE="
 
-:: Check user profile location first
 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
     set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
     set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
-    for /f "tokens=2" %%V in ('"%USERPROFILE%\.cargo\bin\cargo.exe" --version 2^>^&1') do echo          Found: Rust %%V
-    goto :rust_found
+    for /f "tokens=*" %%V in ('"%USERPROFILE%\.cargo\bin\cargo.exe" --version 2^>^&1') do echo          %%V found
+    
+    :: Ensure default toolchain is set
+    "%USERPROFILE%\.cargo\bin\rustup.exe" default stable >nul 2>nul
+    goto :rust_ok
 )
 
-:: Check if cargo in PATH works
 cargo --version >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     set "CARGO_EXE=cargo"
-    for /f "tokens=2" %%V in ('cargo --version 2^>^&1') do echo          Found: Rust %%V
-    goto :rust_found
+    for /f "tokens=*" %%V in ('cargo --version 2^>^&1') do echo          %%V found
+    
+    :: Ensure default toolchain is set
+    rustup default stable >nul 2>nul
+    goto :rust_ok
 )
 
-:: Rust not found - install it
-echo          Rust not found. Installing automatically...
-echo.
+:: Install Rust
+echo          Not found. Installing Rust...
+echo          This may take 5-10 minutes...
 
-where winget >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo          Installing Rust via winget...
-    winget install Rustlang.Rustup --accept-package-agreements --accept-source-agreements
-    if %ERRORLEVEL% equ 0 (
-        echo          Initializing Rust...
-        "%USERPROFILE%\.cargo\bin\rustup.exe" default stable 2>nul
-        set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
-        set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
-        timeout /t 3 >nul
-        echo          Rust installed successfully!
-        goto :rust_found
-    )
-)
-
-:: Try downloading rustup-init directly
-echo          Downloading Rust installer...
 set "RUSTUP_INIT=%TEMP%\rustup-init.exe"
-curl -L -o "%RUSTUP_INIT%" "https://win.rustup.rs/x86_64" 2>nul
+curl -sSf -o "%RUSTUP_INIT%" https://win.rustup.rs/x86_64
+
 if exist "%RUSTUP_INIT%" (
     echo          Running Rust installer...
-    "%RUSTUP_INIT%" -y --default-toolchain stable 2>nul
-    timeout /t 5 >nul
-    del "%RUSTUP_INIT%" 2>nul
-    set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
-    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
-    if exist "!CARGO_EXE!" (
-        echo          Rust installed successfully!
-        goto :rust_found
-    )
-)
-
-echo          ERROR: Could not install Rust automatically.
-echo          Please install from https://rustup.rs/
-pause
-exit /b 1
-
-:rust_found
-
-echo.
-echo   All prerequisites OK!
-echo.
-
-:: ============================================================
-:: Step 1: Build Backend
-:: ============================================================
-echo   ================================================================
-echo   STEP 1: BUILD PYTHON BACKEND
-echo   ================================================================
-echo.
-
-call "%SCRIPT_DIR%\build-backend.bat"
-if %ERRORLEVEL% neq 0 (
-    echo.
-    echo   Backend build failed!
-    pause
-    exit /b 1
-)
-
-:: ============================================================
-:: Step 2: Build Frontend
-:: ============================================================
-echo.
-echo   ================================================================
-echo   STEP 2: BUILD TAURI FRONTEND
-echo   ================================================================
-echo.
-
-call "%SCRIPT_DIR%\build-frontend.bat"
-if %ERRORLEVEL% neq 0 (
-    echo.
-    echo   Frontend build failed!
-    pause
-    exit /b 1
-)
-
-:: ============================================================
-:: Done
-:: ============================================================
-set "INSTALLER=%SCRIPT_DIR%\dist\PhotoSense-AI-1.0.0-Setup.exe"
-
-if exist "%INSTALLER%" (
-    echo.
-    echo   ================================================================
-    echo   ^|                    BUILD SUCCESSFUL!                         ^|
-    echo   ================================================================
-    echo.
-    echo   Installer: %INSTALLER%
-    echo.
-    echo   To install PhotoSense-AI:
-    echo   1. Double-click PhotoSense-AI-1.0.0-Setup.exe
-    echo   2. Follow the installation wizard
-    echo   3. Launch from Start Menu or Desktop
-    echo.
+    "%RUSTUP_INIT%" -y --default-toolchain stable --profile minimal
+    del "%RUSTUP_INIT%"
     
-    set /p "OPEN_FOLDER=  Open dist folder? [Y/N]: "
-    if /i "!OPEN_FOLDER!"=="Y" (
-        explorer "%SCRIPT_DIR%\dist"
+    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+    set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
+    
+    timeout /t 3 >nul
+    
+    if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
+        echo          Rust installed successfully
+    ) else (
+        echo          ERROR: Rust installation failed
+        pause
+        exit /b 1
     )
 ) else (
-    echo.
-    echo   ================================================================
-    echo   BUILD COMPLETED - Check dist folder for outputs
-    echo   ================================================================
-    echo.
+    echo          ERROR: Could not download Rust installer
+    pause
+    exit /b 1
 )
 
+:rust_ok
+
+:: ------------------------------------------------------------
+:: Visual Studio Build Tools Check
+:: ------------------------------------------------------------
+echo   [4/4] Checking Visual Studio Build Tools...
+
+set "VS_FOUND=0"
+
+for %%V in (2022 2019 2017) do (
+    if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\%%V\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
+        set "VS_FOUND=1"
+        echo          Visual Studio %%V Build Tools found
+        goto :vs_ok
+    )
+    if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\%%V\Community\VC\Auxiliary\Build\vcvars64.bat" (
+        set "VS_FOUND=1"
+        echo          Visual Studio %%V Community found
+        goto :vs_ok
+    )
+)
+
+:vs_ok
+if "%VS_FOUND%"=="0" (
+    echo          Not found. Installing VS Build Tools...
+    echo          This may take 15-30 minutes and requires ~6GB download...
+    echo.
+    
+    where winget >nul 2>nul
+    if !ERRORLEVEL! equ 0 (
+        winget install Microsoft.VisualStudio.2022.BuildTools --silent --accept-package-agreements --accept-source-agreements --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+        echo          Build Tools installed
+    ) else (
+        echo          WARNING: Could not install Build Tools automatically
+        echo          InsightFace may fail to install
+        echo          You can install manually from: https://aka.ms/vs/17/release/vs_BuildTools.exe
+        echo.
+        timeout /t 5
+    )
+)
+
+echo.
+echo   All prerequisites ready!
+echo.
+
+:: ============================================================
+:: STEP 2: Build Backend
+:: ============================================================
+echo.
+echo   ============================================================
+echo   STEP 2: BUILDING BACKEND
+echo   ============================================================
+echo.
+
+cd /d "%SCRIPT_DIR%"
+call build-backend.bat
+
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo   ERROR: Backend build failed!
+    pause
+    exit /b 1
+)
+
+:: ============================================================
+:: STEP 3: Build Frontend
+:: ============================================================
+echo.
+echo   ============================================================
+echo   STEP 3: BUILDING FRONTEND
+echo   ============================================================
+echo.
+
+cd /d "%SCRIPT_DIR%"
+call build-frontend.bat
+
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo   ERROR: Frontend build failed!
+    pause
+    exit /b 1
+)
+
+:: ============================================================
+:: Done!
+:: ============================================================
+echo.
+echo   ============================================================
+echo   BUILD COMPLETE!
+echo   ============================================================
+echo.
+echo   Installer created: %SCRIPT_DIR%\dist\PhotoSense-AI-1.0.0-Setup.exe
+echo.
+echo   You can now distribute this installer to Windows users.
+echo.
 pause
 exit /b 0

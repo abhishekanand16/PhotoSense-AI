@@ -1,235 +1,142 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: ============================================================
-:: Build PhotoSense-AI Backend for Windows
-:: Creates a standalone executable using PyInstaller
-:: Automatically installs Python if missing.
-:: ============================================================
+title Backend Build
 
-title PhotoSense-AI Backend Build
-
-:: Get directories
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 for %%I in ("%SCRIPT_DIR%\..\.." ) do set "PROJECT_ROOT=%%~fI"
-set "OUTPUT_DIR=%SCRIPT_DIR%\dist\backend"
 set "VENV_DIR=%SCRIPT_DIR%\.venv"
 
-echo.
-echo   ============================================================
-echo   PhotoSense-AI Backend Build for Windows
-echo   ============================================================
-echo.
-echo   Project Root: %PROJECT_ROOT%
-echo   Output Dir:   %OUTPUT_DIR%
+echo   Building Python backend...
 echo.
 
 :: ============================================================
-:: Step 1: Find or Install Python
+:: Find Python
 :: ============================================================
-echo   [1/6] Finding Python...
-
 set "PYTHON_EXE="
 
-:: Check common installation locations FIRST (skip Windows Store alias)
 for %%P in (
     "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
-    "C:\Python313\python.exe"
-    "C:\Python312\python.exe"
-    "C:\Python311\python.exe"
-    "C:\Python310\python.exe"
-    "%ProgramFiles%\Python313\python.exe"
-    "%ProgramFiles%\Python312\python.exe"
-    "%ProgramFiles%\Python311\python.exe"
-    "%ProgramFiles%\Python310\python.exe"
 ) do (
     if exist "%%~P" (
         set "PYTHON_EXE=%%~P"
-        for /f "tokens=*" %%V in ('"%%~P" --version 2^>^&1') do echo          Found: %%V at %%~P
-        goto :found_python
+        goto :python_found
     )
 )
 
-:: Check if python in PATH actually works (not Windows Store alias)
-where python >nul 2>nul
+python --version >nul 2>nul
 if %ERRORLEVEL% equ 0 (
-    :: Test if it actually runs
-    python -c "print('ok')" >nul 2>nul
-    if !ERRORLEVEL! equ 0 (
-        set "PYTHON_EXE=python"
-        for /f "tokens=*" %%V in ('python --version 2^>^&1') do echo          Found: %%V
-        goto :found_python
-    )
+    set "PYTHON_EXE=python"
+    goto :python_found
 )
 
-:: Python not found - install it
-echo          Python not found. Installing automatically...
-echo.
-
-where winget >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo          Installing Python via winget...
-    winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
-    if %ERRORLEVEL% equ 0 (
-        echo          Python installed successfully!
-        set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-        set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
-        timeout /t 3 >nul
-        goto :found_python
-    )
-)
-
-:: Try downloading installer
-echo          Downloading Python installer...
-set "PY_INSTALLER=%TEMP%\python_installer.exe"
-curl -L -o "%PY_INSTALLER%" "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe" 2>nul
-if exist "%PY_INSTALLER%" (
-    echo          Running Python installer...
-    "%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
-    timeout /t 15 >nul
-    del "%PY_INSTALLER%" 2>nul
-    set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-    set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
-    if exist "!PYTHON_EXE!" (
-        echo          Python installed successfully!
-        goto :found_python
-    )
-)
-
-echo          ERROR: Could not install Python automatically.
-echo          Please install from https://www.python.org/downloads/
-echo          Make sure to check "Add Python to PATH" during installation.
-pause
+echo   ERROR: Python not found
 exit /b 1
 
-:found_python
-
-:: Verify Python actually works
-"%PYTHON_EXE%" -c "print('Python OK')" >nul 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo          ERROR: Python found but not working properly.
-    echo          Please reinstall from https://www.python.org/downloads/
-    pause
-    exit /b 1
-)
+:python_found
 
 :: ============================================================
-:: Step 2: Create Virtual Environment
+:: Create Virtual Environment
 :: ============================================================
-echo.
-echo   [2/6] Setting up virtual environment...
+echo   [1/5] Creating virtual environment...
 
-if exist "%VENV_DIR%" (
-    echo          Removing existing venv...
-    rmdir /s /q "%VENV_DIR%" 2>nul
-)
+if exist "%VENV_DIR%" rmdir /s /q "%VENV_DIR%" 2>nul
 
-echo          Creating new venv...
 "%PYTHON_EXE%" -m venv "%VENV_DIR%"
 if %ERRORLEVEL% neq 0 (
-    echo          ERROR: Failed to create virtual environment
-    pause
+    echo   ERROR: Failed to create venv
     exit /b 1
 )
 
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 set "VENV_PIP=%VENV_DIR%\Scripts\pip.exe"
 
-echo          Virtual environment created!
+:: ============================================================
+:: Upgrade pip
+:: ============================================================
+echo   [2/5] Upgrading pip...
+
+"%VENV_PYTHON%" -m pip install --upgrade pip setuptools wheel --quiet
 
 :: ============================================================
-:: Step 3: Upgrade pip
+:: Install Dependencies
 :: ============================================================
-echo.
-echo   [3/6] Upgrading pip...
+echo   [3/5] Installing dependencies (10-30 minutes)...
 
-"%VENV_PYTHON%" -m pip install --upgrade pip --quiet 2>nul
-echo          pip upgraded!
+:: Core dependencies first
+"%VENV_PIP%" install "numpy>=1.26.4,<2" --quiet
+"%VENV_PIP%" install Cython --quiet
 
-:: ============================================================
-:: Step 4: Install Dependencies
-:: ============================================================
-echo.
-echo   [4/6] Installing dependencies...
-echo          This may take 10-30 minutes on first run.
-echo.
-
-:: Install in correct order to avoid conflicts
-echo          Installing numpy...
-"%VENV_PIP%" install "numpy>=1.26.4,<2" --quiet 2>nul
-
+:: PyTorch
 echo          Installing PyTorch...
-"%VENV_PIP%" install torch torchvision 2>nul
+"%VENV_PIP%" install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
 
-echo          Installing OpenCV and Pillow...
-"%VENV_PIP%" install opencv-python pillow --quiet 2>nul
+:: Computer vision
+"%VENV_PIP%" install opencv-python pillow --quiet
 
-echo          Installing ONNX Runtime...
-"%VENV_PIP%" install onnxruntime --quiet 2>nul
-"%VENV_PIP%" install "onnx>=1.16.0,<1.18" --quiet 2>nul
+:: ONNX
+"%VENV_PIP%" install onnxruntime "onnx>=1.16.0,<1.18" --quiet
 
+:: InsightFace (critical - may take time to compile)
 echo          Installing InsightFace...
-"%VENV_PIP%" install insightface 2>nul
+"%VENV_PIP%" install insightface --no-build-isolation
+if %ERRORLEVEL% neq 0 (
+    echo          Retrying InsightFace installation...
+    "%VENV_PIP%" install insightface
+    if !ERRORLEVEL! neq 0 (
+        echo.
+        echo   ERROR: InsightFace installation failed
+        echo   Install Visual Studio Build Tools from:
+        echo   https://aka.ms/vs/17/release/vs_BuildTools.exe
+        echo   Select "Desktop development with C++"
+        exit /b 1
+    )
+)
 
-echo          Installing remaining packages...
-"%VENV_PIP%" install -r "%PROJECT_ROOT%\requirements.txt" --quiet 2>nul
+:: Remaining packages
+"%VENV_PIP%" install -r "%PROJECT_ROOT%\requirements.txt" --quiet
 
-echo          Installing PyInstaller...
-"%VENV_PIP%" install pyinstaller --quiet 2>nul
+:: PyInstaller
+"%VENV_PIP%" install pyinstaller --quiet
 
 echo          Dependencies installed!
 
 :: ============================================================
-:: Step 5: Clean Previous Build
+:: Clean Previous Build
 :: ============================================================
-echo.
-echo   [5/6] Cleaning previous build...
+echo   [4/5] Cleaning previous build...
 
 if exist "%SCRIPT_DIR%\build" rmdir /s /q "%SCRIPT_DIR%\build" 2>nul
 if exist "%SCRIPT_DIR%\dist" rmdir /s /q "%SCRIPT_DIR%\dist" 2>nul
 
-echo          Cleaned!
-
 :: ============================================================
-:: Step 6: Run PyInstaller
+:: Run PyInstaller
 :: ============================================================
-echo.
-echo   [6/6] Building executable with PyInstaller...
-echo          This takes 5-15 minutes...
-echo.
+echo   [5/5] Building with PyInstaller (5-15 minutes)...
 
 cd /d "%SCRIPT_DIR%"
-"%VENV_PYTHON%" -m PyInstaller backend.spec --noconfirm --clean
+"%VENV_PYTHON%" -m PyInstaller backend.spec --noconfirm --clean --log-level WARN
 
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo          ERROR: PyInstaller build failed!
-    pause
+    echo   ERROR: PyInstaller build failed
     exit /b 1
 )
 
 :: Verify output
-set "BACKEND_EXE=%SCRIPT_DIR%\dist\photosense-backend\photosense-backend.exe"
-if not exist "%BACKEND_EXE%" (
+if not exist "%SCRIPT_DIR%\dist\photosense-backend\photosense-backend.exe" (
     echo.
-    echo          ERROR: Build output not found!
-    pause
+    echo   ERROR: Build output not found
     exit /b 1
 )
 
-:: Create version file
-echo PhotoSense-AI Backend > "%SCRIPT_DIR%\dist\photosense-backend\version.txt"
-echo Version: 1.0.0 >> "%SCRIPT_DIR%\dist\photosense-backend\version.txt"
-echo Build Date: %DATE% %TIME% >> "%SCRIPT_DIR%\dist\photosense-backend\version.txt"
-echo Platform: Windows x64 >> "%SCRIPT_DIR%\dist\photosense-backend\version.txt"
-
 echo.
 echo   ============================================================
-echo   BACKEND BUILD COMPLETE!
+echo   BACKEND BUILD COMPLETE
 echo   ============================================================
 echo.
 echo   Output: %SCRIPT_DIR%\dist\photosense-backend\

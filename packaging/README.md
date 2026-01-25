@@ -1,65 +1,125 @@
-# PhotoSense-AI Packaging
+# PhotoSense-AI Windows Installer
 
-Build scripts for creating distributable installers for PhotoSense-AI.
+Build a complete Windows installer for PhotoSense-AI.
 
-## Windows Installer
+## Quick Start
 
-### Quick Start
+1. Open File Explorer
+2. Navigate to `packaging\windows\`
+3. **Double-click `install.bat`**
+4. Wait 30-60 minutes
 
-1. Navigate to `packaging\windows\` in File Explorer
-2. **Double-click `install.bat`**
-3. Follow the prompts
+That's it. The installer handles everything automatically.
 
-That's it! The script will:
-- Check for required tools (Python, Node.js, Rust)
-- Build the Python backend (~15-30 minutes)
-- Build the Tauri frontend (~10-15 minutes)
-- Create the final installer
+## What It Does
 
-### Output
+The installer will:
+1. Check for Python, Node.js, Rust, and Visual Studio Build Tools
+2. Install any missing prerequisites automatically
+3. Build the Python backend (~15-30 minutes)
+4. Build the Tauri frontend (~10-15 minutes)
+5. Create `PhotoSense-AI-1.0.0-Setup.exe`
 
-After successful build:
+## Output
+
 ```
 packaging\windows\dist\PhotoSense-AI-1.0.0-Setup.exe
 ```
 
-### Prerequisites
+This is your distributable installer. Users just double-click it to install PhotoSense-AI.
 
-| Tool | Version | Installation |
-|------|---------|--------------|
-| Python | 3.10+ | `winget install Python.Python.3.12` or [python.org](https://www.python.org/downloads/) |
-| Node.js | 18+ | `winget install OpenJS.NodeJS.LTS` or [nodejs.org](https://nodejs.org/) |
-| Rust | Latest | `winget install Rustlang.Rustup` or [rustup.rs](https://rustup.rs/) |
+## Requirements
 
-**Disk Space:** ~20GB free space recommended
+- **Windows 10/11** with winget (comes pre-installed)
+- **20GB free disk space**
+- **Internet connection** (for downloading dependencies)
+- **Administrator privileges** (for installing build tools)
 
-### Build Scripts
+## What Gets Installed Automatically
 
-| File | Description |
-|------|-------------|
-| `install.bat` | **Main entry point** - builds everything |
-| `build-backend.bat` | Builds Python backend only |
-| `build-frontend.bat` | Builds Tauri frontend only (run backend first) |
+| Tool | Size | Why |
+|------|------|-----|
+| Python 3.12 | ~100MB | Backend runtime |
+| Node.js LTS | ~50MB | Frontend build |
+| Rust | ~400MB | Tauri framework |
+| Visual Studio Build Tools | ~6GB | C++ compiler for InsightFace |
 
-### Troubleshooting
+## Troubleshooting
 
-**"Python not found"**
-- Install Python from https://www.python.org/downloads/
-- Check "Add Python to PATH" during installation
-- Restart the command prompt
+### "InsightFace installation failed"
 
-**"Node.js not found"**
-- Install Node.js LTS from https://nodejs.org/
-- Restart the command prompt
+Visual Studio Build Tools installation may have failed. Manually install:
+1. Download: https://aka.ms/vs/17/release/vs_BuildTools.exe
+2. Run installer
+3. Select "Desktop development with C++"
+4. Wait for installation (~15 minutes)
+5. Run `install.bat` again
 
-**"Rust not found"**
-- Install Rust from https://rustup.rs/
-- Restart the command prompt after installation
+### "Rust couldn't choose a version"
 
-**Build takes too long**
-- First build downloads ~5GB of dependencies
-- Subsequent builds are faster
+1. Open a NEW terminal/command prompt
+2. Run: `rustup default stable`
+3. Close terminal
+4. Run `install.bat` again
 
-**Installer won't run**
-- Windows SmartScreen may block unsigned executables
-- Click "More info" then "Run anyway"
+### "Build failed" or other errors
+
+1. Close all terminals
+2. Delete `packaging\windows\.venv` folder
+3. Delete `packaging\windows\.build` folder
+4. Delete `packaging\windows\dist` folder
+5. Run `install.bat` again
+
+### Still having issues?
+
+Run each step manually to see detailed errors:
+
+```cmd
+cd packaging\windows
+build-backend.bat
+build-frontend.bat
+```
+
+## Build Time Breakdown
+
+First build:
+- Prerequisites installation: 20-40 minutes
+- Backend build: 15-30 minutes
+- Frontend build: 10-15 minutes
+- **Total: 45-85 minutes**
+
+Subsequent builds:
+- Backend rebuild: 5-10 minutes
+- Frontend rebuild: 5-10 minutes
+- **Total: 10-20 minutes**
+
+## Manual Prerequisites Installation
+
+If automatic installation fails, install manually:
+
+### Python 3.12
+```cmd
+winget install Python.Python.3.12
+```
+Or download from: https://www.python.org/downloads/
+
+### Node.js LTS
+```cmd
+winget install OpenJS.NodeJS.LTS
+```
+Or download from: https://nodejs.org/
+
+### Rust
+```cmd
+winget install Rustlang.Rustup
+rustup default stable
+```
+Or download from: https://rustup.rs/
+
+### Visual Studio Build Tools
+```cmd
+winget install Microsoft.VisualStudio.2022.BuildTools
+```
+Or download from: https://aka.ms/vs/17/release/vs_BuildTools.exe
+
+After manual installation, restart your terminal and run `install.bat`.
