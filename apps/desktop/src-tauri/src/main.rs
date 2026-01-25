@@ -58,15 +58,37 @@ fn start_backend(app: &tauri::AppHandle) -> Result<std::process::Child, String> 
     println!("[PhotoSense] Starting backend...");
     log_line(app, "[PhotoSense] Starting backend...");
 
+    // #region agent log
+    let debug_log = std::path::PathBuf::from("/Users/abhishek/Documents/GitHub/PhotoSense-AI/.cursor/debug.log");
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&debug_log).and_then(|mut f| {
+        use std::io::Write;
+        writeln!(f, r#"{{"location":"main.rs:57","message":"start_backend entry","data":{{"timestamp":{}}},"sessionId":"debug-session","hypothesisId":"A"}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
+    });
+    // #endregion
+
     #[cfg(target_os = "windows")]
     let backend_name = "resources/backend/photosense-backend.exe";
     #[cfg(not(target_os = "windows"))]
     let backend_name = "resources/backend/photosense-backend";
 
+    // #region agent log
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&debug_log).and_then(|mut f| {
+        use std::io::Write;
+        writeln!(f, r#"{{"location":"main.rs:64","message":"backend_name resolved","data":{{"backend_name":"{}","timestamp":{}}},"sessionId":"debug-session","hypothesisId":"A"}}"#, backend_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
+    });
+    // #endregion
+
     let backend_path = app
         .path_resolver()
         .resolve_resource(backend_name)
         .ok_or_else(|| format!("Backend resource not found: {}", backend_name))?;
+
+    // #region agent log
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&debug_log).and_then(|mut f| {
+        use std::io::Write;
+        writeln!(f, r#"{{"location":"main.rs:69","message":"backend_path resolved","data":{{"backend_path":"{}","exists":{},"timestamp":{}}},"sessionId":"debug-session","hypothesisId":"A,E"}}"#, backend_path.display(), backend_path.exists(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
+    });
+    // #endregion
 
     if !backend_path.exists() {
         return Err(format!(
@@ -84,9 +106,17 @@ fn start_backend(app: &tauri::AppHandle) -> Result<std::process::Child, String> 
     {
         use std::os::unix::fs::PermissionsExt;
         if let Ok(meta) = fs::metadata(&backend_path) {
+            let old_mode = meta.permissions().mode();
             let mut perms = meta.permissions();
             perms.set_mode(0o755);
             let _ = fs::set_permissions(&backend_path, perms);
+            
+            // #region agent log
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open(&debug_log).and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, r#"{{"location":"main.rs:86","message":"permissions set","data":{{"old_mode":{},"new_mode":493,"timestamp":{}}},"sessionId":"debug-session","hypothesisId":"B"}}"#, old_mode, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
+            });
+            // #endregion
         }
     }
 
@@ -111,13 +141,35 @@ fn start_backend(app: &tauri::AppHandle) -> Result<std::process::Child, String> 
     let log_handle_clone = log_handle.try_clone()
         .map_err(|e| format!("Failed to clone log handle: {e}"))?;
 
+    // #region agent log
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&debug_log).and_then(|mut f| {
+        use std::io::Write;
+        writeln!(f, r#"{{"location":"main.rs:114","message":"before spawn","data":{{"backend_path":"{}","backend_dir":"{}","data_dir":"{}","timestamp":{}}},"sessionId":"debug-session","hypothesisId":"C,D"}}"#, backend_path.display(), backend_dir.display(), data_dir_str, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
+    });
+    // #endregion
+
     let child = Command::new(&backend_path)
         .current_dir(&backend_dir)
         .env("PHOTOSENSE_DATA_DIR", data_dir_str)
         .stdout(Stdio::from(log_handle_clone))
         .stderr(Stdio::from(log_handle))
         .spawn()
-        .map_err(|e| format!("Failed to spawn backend: {e}"))?;
+        .map_err(|e| {
+            // #region agent log
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open(&debug_log).and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, r#"{{"location":"main.rs:120","message":"spawn failed","data":{{"error":"{}","timestamp":{}}},"sessionId":"debug-session","hypothesisId":"C"}}"#, e.to_string().replace("\"", "\\\""), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
+            });
+            // #endregion
+            format!("Failed to spawn backend: {e}")
+        })?;
+
+    // #region agent log
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&debug_log).and_then(|mut f| {
+        use std::io::Write;
+        writeln!(f, r#"{{"location":"main.rs:122","message":"spawn success","data":{{"pid":{},"timestamp":{}}},"sessionId":"debug-session","hypothesisId":"C"}}"#, child.id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
+    });
+    // #endregion
 
     Ok(child)
 }
