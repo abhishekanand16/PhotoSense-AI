@@ -8,14 +8,20 @@ The `windows/` directory contains everything needed to build a Windows installer
 
 ### Quick Start
 
-1. **Open PowerShell** (as Administrator is recommended but not required)
+**Option 1: Double-click (Easiest)**
 
-2. **Navigate to the packaging directory:**
+1. Navigate to `packaging\windows\` in File Explorer
+2. Double-click `install.bat`
+3. Follow the prompts
+
+**Option 2: PowerShell**
+
+1. Open PowerShell
+2. Navigate to the packaging directory:
    ```powershell
    cd path\to\PhotoSense-AI\packaging\windows
    ```
-
-3. **Run the installer builder:**
+3. Run the installer builder:
    ```powershell
    .\install.ps1
    ```
@@ -46,9 +52,14 @@ The `windows/` directory contains everything needed to build a Windows installer
 
 | Script | Description |
 |--------|-------------|
-| `install.ps1` | Main entry point - runs full build with prerequisite checks |
-| `build-backend.ps1` | Builds Python backend with PyInstaller |
-| `build-frontend.ps1` | Builds Tauri frontend with NSIS installer |
+| `install.bat` | **Recommended** - Double-click to run full build |
+| `install.ps1` | PowerShell version - runs full build with prerequisite checks |
+| `build-backend.bat` | Double-click to build backend only |
+| `build-backend.ps1` | PowerShell - builds Python backend with PyInstaller |
+| `build-frontend.bat` | Double-click to build frontend only (run backend first) |
+| `build-frontend.ps1` | PowerShell - builds Tauri frontend with NSIS installer |
+
+The `.bat` files are wrappers that run the `.ps1` scripts with proper execution policy, so you don't need to worry about PowerShell restrictions.
 
 ### Build Options
 
