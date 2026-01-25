@@ -1,3 +1,5 @@
+# PhotoSense-AI - https://github.com/abhishekanand16/PhotoSense-AI
+# Copyright (c) 2026 Abhishek Anand. Licensed under AGPL-3.0.
 from fastapi import APIRouter
 
 from services.api.models import StatisticsResponse

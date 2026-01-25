@@ -1,5 +1,7 @@
 # PhotoSense-AI Performance Optimizations
 
+> Part of [PhotoSense-AI](https://github.com/abhishekanand16/PhotoSense-AI) - Copyright (c) 2026 Abhishek Anand
+
 This document summarizes the performance optimizations implemented to achieve the goal of 2-3 images/sec sustained processing on an i5 CPU.
 
 ## Optimization Summary

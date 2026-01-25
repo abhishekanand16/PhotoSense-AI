@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# PhotoSense-AI - https://github.com/abhishekanand16/PhotoSense-AI
+# Copyright (c) 2026 Abhishek Anand. Licensed under AGPL-3.0.
 """Download required ML models for offline use."""
 
 import os
