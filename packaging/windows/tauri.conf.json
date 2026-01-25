@@ -83,7 +83,7 @@
     "bundle": {
       "active": true,
       "category": "Photography",
-      "copyright": "Copyright © 2024-2026 PhotoSense-AI",
+      "copyright": "Copyright 2024-2026 PhotoSense-AI",
       "externalBin": [],
       "resources": [
         "resources/backend/**"

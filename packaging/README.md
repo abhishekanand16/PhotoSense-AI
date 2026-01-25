@@ -1,42 +1,27 @@
 # PhotoSense-AI Packaging
 
-This directory contains build scripts for creating distributable installers for PhotoSense-AI.
+Build scripts for creating distributable installers for PhotoSense-AI.
 
 ## Windows Installer
 
-The `windows/` directory contains everything needed to build a Windows installer.
-
 ### Quick Start
 
-**Option 1: Double-click (Easiest)**
-
 1. Navigate to `packaging\windows\` in File Explorer
-2. Double-click `install.bat`
+2. **Double-click `install.bat`**
 3. Follow the prompts
 
-**Option 2: PowerShell**
+That's it! The script will:
+- Check for required tools (Python, Node.js, Rust)
+- Build the Python backend (~15-30 minutes)
+- Build the Tauri frontend (~10-15 minutes)
+- Create the final installer
 
-1. Open PowerShell
-2. Navigate to the packaging directory:
-   ```powershell
-   cd path\to\PhotoSense-AI\packaging\windows
-   ```
-3. Run the installer builder:
-   ```powershell
-   .\install.ps1
-   ```
+### Output
 
-4. **Follow the prompts** - the script will:
-   - Check for required tools (Python, Node.js, Rust)
-   - Offer to install missing tools via winget
-   - Build the Python backend (~15-30 minutes)
-   - Build the Tauri frontend (~10-15 minutes)
-   - Create the final installer
-
-5. **Find your installer at:**
-   ```
-   packaging\windows\dist\PhotoSense-AI-1.0.0-Setup.exe
-   ```
+After successful build:
+```
+packaging\windows\dist\PhotoSense-AI-1.0.0-Setup.exe
+```
 
 ### Prerequisites
 
@@ -46,105 +31,35 @@ The `windows/` directory contains everything needed to build a Windows installer
 | Node.js | 18+ | `winget install OpenJS.NodeJS.LTS` or [nodejs.org](https://nodejs.org/) |
 | Rust | Latest | `winget install Rustlang.Rustup` or [rustup.rs](https://rustup.rs/) |
 
-**Disk Space:** ~20GB free space recommended (for dependencies and build artifacts)
+**Disk Space:** ~20GB free space recommended
 
 ### Build Scripts
 
-| Script | Description |
-|--------|-------------|
-| `install.bat` | **Recommended** - Double-click to run full build |
-| `install.ps1` | PowerShell version - runs full build with prerequisite checks |
-| `build-backend.bat` | Double-click to build backend only |
-| `build-backend.ps1` | PowerShell - builds Python backend with PyInstaller |
-| `build-frontend.bat` | Double-click to build frontend only (run backend first) |
-| `build-frontend.ps1` | PowerShell - builds Tauri frontend with NSIS installer |
-
-The `.bat` files are wrappers that run the `.ps1` scripts with proper execution policy, so you don't need to worry about PowerShell restrictions.
-
-### Build Options
-
-```powershell
-# Full build (default)
-.\install.ps1
-
-# Skip prerequisite checks (useful for CI/CD)
-.\install.ps1 -SkipChecks
-
-# Build only the backend
-.\install.ps1 -BackendOnly
-
-# Build only the frontend (requires backend to be built first)
-.\install.ps1 -FrontendOnly
-```
-
-### Output Structure
-
-After a successful build:
-
-```
-packaging/windows/dist/
-├── backend/
-│   └── photosense-backend/
-│       ├── photosense-backend.exe    # Backend executable
-│       ├── _internal/                # Python + dependencies
-│       └── version.txt               # Build info
-└── PhotoSense-AI-1.0.0-Setup.exe     # Final installer
-```
-
-### Installer Features
-
-The generated NSIS installer:
-
-- **Single-file installer** - One .exe to distribute
-- **User-level installation** - No admin rights required
-- **Start Menu shortcuts** - Easy access to the app
-- **Desktop shortcut** - Optional during install
-- **Uninstaller** - Clean removal via Windows Settings
-- **WebView2 auto-install** - Automatically installs Microsoft Edge WebView2 if needed
+| File | Description |
+|------|-------------|
+| `install.bat` | **Main entry point** - builds everything |
+| `build-backend.bat` | Builds Python backend only |
+| `build-frontend.bat` | Builds Tauri frontend only (run backend first) |
 
 ### Troubleshooting
 
-#### Build Fails at PyInstaller Step
+**"Python not found"**
+- Install Python from https://www.python.org/downloads/
+- Check "Add Python to PATH" during installation
+- Restart the command prompt
 
-1. Ensure Python 3.10+ is installed and in PATH
-2. Try running `build-backend.ps1` separately to see detailed errors
-3. Check that all dependencies install correctly
+**"Node.js not found"**
+- Install Node.js LTS from https://nodejs.org/
+- Restart the command prompt
 
-#### Build Fails at Tauri Step
+**"Rust not found"**
+- Install Rust from https://rustup.rs/
+- Restart the command prompt after installation
 
-1. Ensure Node.js 18+ and Rust are installed
-2. Try running `npm install` manually in `apps/desktop`
-3. Check Rust is properly configured: `rustup show`
+**Build takes too long**
+- First build downloads ~5GB of dependencies
+- Subsequent builds are faster
 
-#### Installer Won't Run
-
-1. Windows SmartScreen may block unsigned executables
-2. Click "More info" then "Run anyway"
-3. Or sign the executable with a code signing certificate
-
-#### App Won't Start After Installation
-
-1. Check Windows Event Viewer for errors
-2. Ensure WebView2 runtime is installed
-3. Try running as Administrator once
-
-### Development Notes
-
-- **Backend entry point:** `backend-entry.py` - Clean Python entry for PyInstaller
-- **PyInstaller spec:** `backend.spec` - Configures bundling with all ML dependencies
-- **Tauri config:** `tauri.conf.json` - Windows-specific Tauri/NSIS configuration
-
-### CI/CD Integration
-
-For automated builds:
-
-```powershell
-# PowerShell
-.\install.ps1 -SkipChecks
-
-# Or run steps separately
-.\build-backend.ps1
-.\build-frontend.ps1
-```
-
-The scripts return appropriate exit codes (0 for success, non-zero for failure).
+**Installer won't run**
+- Windows SmartScreen may block unsigned executables
+- Click "More info" then "Run anyway"

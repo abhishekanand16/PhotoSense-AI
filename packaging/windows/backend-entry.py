@@ -53,16 +53,11 @@ def get_app_data_dir() -> Path:
     
     app_dir = base / "PhotoSense-AI"
     
-    # Create directory with proper error handling
     try:
         app_dir.mkdir(parents=True, exist_ok=True)
-    except PermissionError:
-        # Fallback to user's home directory if APPDATA is not writable
-        app_dir = Path.home() / ".photosense-ai"
-        app_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        print(f"[ERROR] Failed to create app data directory: {e}")
-        # Last resort fallback
+    except (PermissionError, OSError) as e:
+        print(f"[WARNING] Could not create app data directory: {e}")
+        # Fallback to user's home directory
         app_dir = Path.home() / ".photosense-ai"
         app_dir.mkdir(parents=True, exist_ok=True)
     
@@ -145,9 +140,7 @@ def main():
             host=host,
             port=port,
             log_level="info",
-            # Disable reload in production bundle
             reload=False,
-            # Disable access log for cleaner output
             access_log=False,
         )
     except Exception as e:
