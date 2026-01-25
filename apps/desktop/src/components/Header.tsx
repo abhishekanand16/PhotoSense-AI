@@ -34,6 +34,8 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
     message: "Ready",
   });
   const lastStatusRef = useRef<GlobalScanStatus["status"]>("idle");
+  const lastPhaseRef = useRef<string | null | undefined>(null);
+  const lastImportedCountRef = useRef<number>(0);
   const lastKnownActiveStatus = useRef<GlobalScanStatus | null>(null);
   const consecutiveFailures = useRef(0);
 
@@ -52,14 +54,37 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
           lastKnownActiveStatus.current = null;
         }
         
+        // Refresh photos when scan completes
         if (status.status === "completed" && lastStatusRef.current !== "completed") {
           window.dispatchEvent(new CustomEvent('refresh-photos'));
           window.dispatchEvent(new CustomEvent('refresh-people'));
         }
+        
+        // Refresh photos when import phase completes (transition to processing)
+        // This allows users to see photos immediately after import, before ML processing finishes
+        if (status.phase === "processing" && lastPhaseRef.current === "import") {
+          window.dispatchEvent(new CustomEvent('refresh-photos'));
+        }
+        
+        // Refresh photos incrementally during import phase (every 10 new photos)
+        const importedCount = status.imported_photos || 0;
+        if (status.phase === "import" && importedCount > 0) {
+          if (importedCount >= lastImportedCountRef.current + 10) {
+            window.dispatchEvent(new CustomEvent('refresh-photos'));
+            lastImportedCountRef.current = importedCount;
+          }
+        }
+        
+        // Reset imported count tracking when scan completes
+        if (status.status === "completed" || status.status === "idle") {
+          lastImportedCountRef.current = 0;
+        }
+        
         if (status.status === "error" && lastStatusRef.current !== "error") {
           alert(`Scan failed: ${status.error || status.message || "Unknown error"}`);
         }
         lastStatusRef.current = status.status;
+        lastPhaseRef.current = status.phase;
       } catch {
         consecutiveFailures.current += 1;
         
@@ -216,13 +241,37 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
                 <>
                   <Loader2 size={16} className="text-brand-primary animate-spin flex-shrink-0" />
                   <div className="flex flex-col min-w-0">
-                    <span className="text-xs font-bold text-brand-primary">
-                      {globalStatus.progress_percent}%
-                    </span>
-                    <span className="text-[10px] text-light-text-tertiary dark:text-dark-text-tertiary truncate">
-                      {globalStatus.processed_photos}/{globalStatus.total_photos} photos
-                      {formatEta(globalStatus.eta_seconds) ? ` • ETA ${formatEta(globalStatus.eta_seconds)}` : ""}
-                    </span>
+                    {globalStatus.phase === "import" ? (
+                      // PHASE 1: Import - fast, photos visible immediately
+                      <>
+                        <span className="text-xs font-bold text-brand-primary">
+                          Importing... {globalStatus.processed_photos}/{globalStatus.total_photos}
+                        </span>
+                        <span className="text-[10px] text-light-text-tertiary dark:text-dark-text-tertiary truncate">
+                          {formatEta(globalStatus.eta_seconds) ? `ETA ${formatEta(globalStatus.eta_seconds)}` : "Photos visible after import"}
+                        </span>
+                      </>
+                    ) : globalStatus.phase === "clustering" ? (
+                      // PHASE 3: Clustering - organizing faces
+                      <>
+                        <span className="text-xs font-bold text-brand-primary">
+                          Organizing faces...
+                        </span>
+                        <span className="text-[10px] text-light-text-tertiary dark:text-dark-text-tertiary truncate">
+                          Almost done
+                        </span>
+                      </>
+                    ) : (
+                      // PHASE 2: ML Processing - AI analysis in background
+                      <>
+                        <span className="text-xs font-bold text-brand-primary">
+                          Analyzing... {globalStatus.processed_photos}/{globalStatus.total_photos}
+                        </span>
+                        <span className="text-[10px] text-light-text-tertiary dark:text-dark-text-tertiary truncate">
+                          {formatEta(globalStatus.eta_seconds) ? `ETA ${formatEta(globalStatus.eta_seconds)}` : "Processing AI features"}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </>
               ) : globalStatus.status === "error" ? (

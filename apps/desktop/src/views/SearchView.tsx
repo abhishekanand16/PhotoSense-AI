@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { searchApi, Photo } from "../services/api";
-import { Search, Sparkles, Filter, Loader2 } from "lucide-react";
+import { Search, Sparkles, Filter, Loader2, Info } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
+import MetadataPanel from "../components/MetadataPanel";
 
 const SearchView: React.FC = () => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [metadataPhotoId, setMetadataPhotoId] = useState<number | null>(null);
 
   useEffect(() => {
     const handleSearchQuery = (event: CustomEvent) => {
@@ -99,13 +102,38 @@ const SearchView: React.FC = () => {
 
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
             {results.map((photo) => (
-              <Card key={photo.id} className="aspect-square group relative">
+              <Card 
+                key={photo.id} 
+                onClick={() => setSelectedPhoto(photo)}
+                className="aspect-square group relative cursor-pointer"
+              >
                 <img
                   src={convertFileSrc(photo.file_path)}
                   alt={photo.file_path}
                   className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                   loading="lazy"
+                  onError={(e) => {
+                    console.error("Failed to load image:", photo.file_path);
+                    (e.target as HTMLImageElement).src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E";
+                  }}
                 />
+                {/* Info button (visible on hover) */}
+                <button
+                  className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brand-primary transition-all"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMetadataPhotoId(photo.id);
+                  }}
+                  title="View photo info"
+                >
+                  <Info size={14} />
+                </button>
+                {/* Filename overlay on hover */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4">
+                  <span className="text-white text-[10px] font-bold uppercase tracking-wider truncate w-full">
+                    {photo.file_path.split('/').pop()}
+                  </span>
+                </div>
               </Card>
             ))}
           </div>
@@ -129,6 +157,45 @@ const SearchView: React.FC = () => {
             </Card>
           ))}
         </div>
+      )}
+
+      {/* Full-screen photo modal */}
+      {selectedPhoto && (
+        <div
+          className="fixed inset-0 bg-dark-bg/95 flex items-center justify-center z-[100] animate-in fade-in duration-300 backdrop-blur-md"
+          onClick={() => setSelectedPhoto(null)}
+        >
+          <div className="max-w-6xl max-h-[90vh] p-4 relative group" onClick={e => e.stopPropagation()}>
+            <img
+              src={convertFileSrc(selectedPhoto.file_path)}
+              alt={selectedPhoto.file_path}
+              className="max-w-full max-h-[90vh] object-contain rounded-3xl shadow-2xl"
+            />
+            {/* Close button */}
+            <button
+              onClick={() => setSelectedPhoto(null)}
+              className="absolute -top-4 -right-4 w-12 h-12 bg-white text-black rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform font-bold"
+            >
+              ✕
+            </button>
+            {/* Info button */}
+            <button
+              onClick={() => setMetadataPhotoId(selectedPhoto.id)}
+              className="absolute -top-4 right-12 w-12 h-12 bg-brand-primary text-white dark:text-black rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform"
+              title="View photo info"
+            >
+              <Info size={20} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Metadata Panel */}
+      {metadataPhotoId && (
+        <MetadataPanel
+          photoId={metadataPhotoId}
+          onClose={() => setMetadataPhotoId(null)}
+        />
       )}
     </div>
   );

@@ -80,6 +80,9 @@ class GlobalScanStatusResponse(BaseModel):
     started_at: Optional[str] = None
     eta_seconds: Optional[int] = None
     error: Optional[str] = None
+    # New fields to allow browsing during scanning
+    phase: Optional[str] = None  # "import", "processing", "clustering", "complete"
+    imported_photos: int = 0  # Number of photos already imported (viewable)
 
 
 class UpdatePersonRequest(BaseModel):

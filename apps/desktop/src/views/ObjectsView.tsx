@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { CategorySummary, objectsApi, Photo, scenesApi, SceneSummary, tagsApi, TagSummary } from "../services/api";
-import { Box, ChevronDown, Tag } from "lucide-react";
+import { Box, ChevronDown, Tag, Info } from "lucide-react";
 import EmptyState from "../components/common/EmptyState";
 import Card from "../components/common/Card";
+import MetadataPanel from "../components/MetadataPanel";
 
 const MAX_TAGS_PER_GROUP = 6;
 const FLORENCE_TAG_PREFIX = "florence:";
@@ -80,6 +81,7 @@ const ObjectsView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [metadataPhotoId, setMetadataPhotoId] = useState<number | null>(null);
 
   useEffect(() => {
     loadCategories();
@@ -507,7 +509,7 @@ const ObjectsView: React.FC = () => {
               <Card
                 key={photo.id}
                 onClick={() => setSelectedPhoto(photo)}
-                className="aspect-square group relative"
+                className="aspect-square group relative cursor-pointer"
               >
                 <img
                   src={convertFileSrc(photo.file_path)}
@@ -518,6 +520,17 @@ const ObjectsView: React.FC = () => {
                     (e.target as HTMLImageElement).src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E";
                   }}
                 />
+                {/* Info button (visible on hover) */}
+                <button
+                  className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brand-primary transition-all"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMetadataPhotoId(photo.id);
+                  }}
+                  title="View photo info"
+                >
+                  <Info size={14} />
+                </button>
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4">
                   <span className="text-white text-[10px] font-bold uppercase tracking-wider truncate w-full">
                     {photo.file_path.split('/').pop()}
@@ -549,14 +562,31 @@ const ObjectsView: React.FC = () => {
               alt={selectedPhoto.file_path}
               className="max-w-full max-h-[90vh] object-contain rounded-3xl shadow-2xl"
             />
+            {/* Close button */}
             <button
               onClick={() => setSelectedPhoto(null)}
               className="absolute -top-4 -right-4 w-12 h-12 bg-white text-black rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform font-bold"
             >
               ✕
             </button>
+            {/* Info button */}
+            <button
+              onClick={() => setMetadataPhotoId(selectedPhoto.id)}
+              className="absolute -top-4 right-12 w-12 h-12 bg-brand-primary text-white dark:text-black rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform"
+              title="View photo info"
+            >
+              <Info size={20} />
+            </button>
           </div>
         </div>
+      )}
+
+      {/* Metadata Panel */}
+      {metadataPhotoId && (
+        <MetadataPanel
+          photoId={metadataPhotoId}
+          onClose={() => setMetadataPhotoId(null)}
+        />
       )}
     </div>
   );

@@ -77,6 +77,9 @@ export interface GlobalScanStatus {
   started_at?: string | null;
   eta_seconds?: number | null;
   error?: string | null;
+  // New fields to allow browsing during scanning
+  phase?: "import" | "processing" | "clustering" | "complete" | null;
+  imported_photos?: number;  // Number of photos already imported (viewable)
 }
 
 export interface Place {
@@ -351,6 +354,48 @@ export const placesApi = {
 
   getStats: async (): Promise<LocationStats> => {
     const response = await api.get<LocationStats>("/places/stats");
+    return response.data;
+  },
+};
+
+// Model status types for first-time setup
+export interface ModelStatus {
+  name: string;
+  display_name: string;
+  size_mb: number;
+  status: "pending" | "checking" | "downloading" | "loading" | "ready" | "error";
+  progress: number;
+  error?: string | null;
+  downloaded_mb: number;
+}
+
+export interface ModelsOverallStatus {
+  overall_progress: number;
+  total_size_mb: number;
+  completed_size_mb: number;
+  models_ready: number;
+  models_downloading: number;
+  models_pending: number;
+  models_error: number;
+  all_ready: boolean;
+  any_downloading: boolean;
+  needs_setup: boolean;
+  models: Record<string, ModelStatus>;
+}
+
+export const modelsApi = {
+  getStatus: async (): Promise<ModelsOverallStatus> => {
+    const response = await api.get<ModelsOverallStatus>("/models/status", { timeout: 5000 });
+    return response.data;
+  },
+
+  initialize: async (): Promise<{ status: string; message: string }> => {
+    const response = await api.post<{ status: string; message: string }>("/models/initialize");
+    return response.data;
+  },
+
+  check: async (): Promise<{ models: Record<string, { cached: boolean }>; needs_download: boolean }> => {
+    const response = await api.get("/models/check");
     return response.data;
   },
 };
