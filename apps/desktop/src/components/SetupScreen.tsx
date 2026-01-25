@@ -195,7 +195,7 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete }) => {
         </div>
 
         {/* Skip button (for development) */}
-        {process.env.NODE_ENV === "development" && (
+        {import.meta.env.DEV && (
           <div className="mt-4 text-center">
             <button
               onClick={onComplete}
