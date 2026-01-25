@@ -5,6 +5,7 @@ Provides real-time visibility into model download/load status for first-time set
 """
 
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -17,6 +18,10 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 # Thread pool for model initialization
 _init_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="model_init")
+
+# Track if auto-initialization has been started
+_auto_init_started = False
+_auto_init_lock = threading.Lock()
 
 
 class ModelStatusResponse(BaseModel):
@@ -52,10 +57,22 @@ async def get_models_status():
     
     Returns overall progress and individual model statuses.
     Used by frontend to show first-time setup progress.
+    
+    NOTE: Automatically starts model initialization on first call if models aren't ready.
     """
+    global _auto_init_started
+    
     tracker = get_model_tracker()
     overall = tracker.get_overall_progress()
     models = tracker.get_all_status()
+    
+    # Auto-start initialization if models aren't ready and we haven't started yet
+    if not overall["all_ready"] and not _auto_init_started:
+        with _auto_init_lock:
+            if not _auto_init_started:
+                _auto_init_started = True
+                # Start initialization in background thread
+                _init_executor.submit(_initialize_models_sync)
     
     return ModelsOverallStatusResponse(
         overall_progress=overall["overall_progress"],
