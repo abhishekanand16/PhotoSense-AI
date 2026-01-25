@@ -1,75 +1,154 @@
 #!/bin/bash
 set -e
 
-echo "Building PhotoSense-AI for macOS..."
+echo ""
+echo "============================================================"
+echo "PhotoSense-AI macOS Installer Build"
+echo "============================================================"
 echo ""
 
 # Get directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DESKTOP_SRC="$PROJECT_ROOT/apps/desktop"
+BUILD_DIR="$SCRIPT_DIR/.build"
 
-# Build backend
-echo "[1/3] Building Python backend..."
+echo "Project Root: $PROJECT_ROOT"
+echo "Desktop Source: $DESKTOP_SRC"
+echo ""
+
+# ============================================================
+# Step 1: Build Backend
+# ============================================================
+echo "============================================================"
+echo "STEP 1: BUILD BACKEND"
+echo "============================================================"
+echo ""
+
 cd "$SCRIPT_DIR"
 
 # Create venv
+echo "[1/5] Creating virtual environment..."
+if [ -d ".venv" ]; then
+    rm -rf .venv
+fi
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
+# Upgrade pip
+echo "[2/5] Upgrading pip..."
 pip install --upgrade pip setuptools wheel --quiet
+
+# Install dependencies
+echo "[3/5] Installing dependencies (10-30 minutes)..."
 pip install -r "$PROJECT_ROOT/requirements.txt" --quiet
 pip install pyinstaller --quiet
 
+# Clean previous build
+echo "[4/5] Cleaning previous build..."
+rm -rf build dist
+
 # Build with PyInstaller
-pyinstaller --noconfirm --clean \
-  --name photosense-backend \
-  --onedir \
-  --console \
-  --add-data "$PROJECT_ROOT/services:services" \
-  --add-data "$PROJECT_ROOT/requirements.txt:." \
-  --hidden-import uvicorn \
-  --hidden-import fastapi \
-  --hidden-import pydantic \
-  --hidden-import torch \
-  --hidden-import torchvision \
-  --hidden-import transformers \
-  --hidden-import insightface \
-  --hidden-import onnxruntime \
-  --hidden-import ultralytics \
-  --hidden-import faiss \
-  --collect-all torch \
-  --collect-all torchvision \
-  --collect-all transformers \
-  --collect-all insightface \
-  "$PROJECT_ROOT/services/api/main.py"
+echo "[5/5] Building with PyInstaller (5-15 minutes)..."
+pyinstaller backend.spec --noconfirm --clean
 
-echo "Backend built: $SCRIPT_DIR/dist/photosense-backend/"
+if [ ! -f "dist/photosense-backend/photosense-backend" ]; then
+    echo ""
+    echo "ERROR: Backend build failed!"
+    exit 1
+fi
 
-# Build frontend
 echo ""
-echo "[2/3] Building Tauri frontend..."
-cd "$DESKTOP_SRC"
+echo "✅ Backend built: $SCRIPT_DIR/dist/photosense-backend/"
+echo ""
 
-# Install Rust targets for universal build
-rustup target add x86_64-apple-darwin
-rustup target add aarch64-apple-darwin
+# ============================================================
+# Step 2: Prepare Frontend Build
+# ============================================================
+echo "============================================================"
+echo "STEP 2: PREPARE FRONTEND BUILD"
+echo "============================================================"
+echo ""
+
+# Create build directory
+echo "[1/3] Setting up build directory..."
+if [ -d "$BUILD_DIR" ]; then
+    rm -rf "$BUILD_DIR"
+fi
+mkdir -p "$BUILD_DIR"
+
+# Copy desktop source
+cp -R "$DESKTOP_SRC/"* "$BUILD_DIR/"
+
+# Copy macOS Tauri config
+echo "[2/3] Applying macOS Tauri config..."
+cp "$SCRIPT_DIR/tauri.conf.json" "$BUILD_DIR/src-tauri/"
+
+# Copy backend bundle
+echo "[3/3] Copying backend bundle..."
+RESOURCES_DIR="$BUILD_DIR/src-tauri/resources/backend"
+mkdir -p "$RESOURCES_DIR"
+cp -R "$SCRIPT_DIR/dist/photosense-backend/"* "$RESOURCES_DIR/"
+
+echo ""
+echo "✅ Frontend build directory ready"
+echo ""
+
+# ============================================================
+# Step 3: Build Frontend
+# ============================================================
+echo "============================================================"
+echo "STEP 3: BUILD TAURI FRONTEND"
+echo "============================================================"
+echo ""
+
+cd "$BUILD_DIR"
+
+# Install Rust targets
+echo "[1/4] Installing Rust targets..."
+rustup target add x86_64-apple-darwin 2>/dev/null || true
+rustup target add aarch64-apple-darwin 2>/dev/null || true
 
 # Install npm dependencies
+echo "[2/4] Installing npm dependencies..."
 npm install --silent
 
 # Build Tauri app
+echo "[3/4] Building Tauri app (10-20 minutes)..."
+echo "         This creates a universal binary for Intel + Apple Silicon"
+echo ""
 npm run tauri build -- --target universal-apple-darwin
 
-echo "Frontend built: $DESKTOP_SRC/src-tauri/target/release/bundle/dmg/"
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "ERROR: Tauri build failed!"
+    exit 1
+fi
 
-# Copy DMG to dist
-echo ""
-echo "[3/3] Copying installer..."
+# Move DMG to dist
+echo "[4/4] Moving installer..."
 mkdir -p "$SCRIPT_DIR/dist"
-cp "$DESKTOP_SRC/src-tauri/target/release/bundle/dmg/"*.dmg "$SCRIPT_DIR/dist/PhotoSense-AI.dmg"
+DMG_FILE=$(find "$BUILD_DIR/src-tauri/target/universal-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -n 1)
+
+if [ -z "$DMG_FILE" ]; then
+    echo ""
+    echo "ERROR: DMG file not found!"
+    exit 1
+fi
+
+cp "$DMG_FILE" "$SCRIPT_DIR/dist/PhotoSense-AI.dmg"
 
 echo ""
-echo "✅ Build complete!"
+echo "============================================================"
+echo "BUILD COMPLETE!"
+echo "============================================================"
+echo ""
 echo "Installer: $SCRIPT_DIR/dist/PhotoSense-AI.dmg"
+echo ""
+echo "This DMG contains:"
+echo "  ✅ Universal binary (Intel + Apple Silicon)"
+echo "  ✅ Python backend bundled inside"
+echo "  ✅ All ML models and dependencies"
+echo ""
+echo "Users can drag PhotoSense-AI.app to Applications folder"
+echo ""

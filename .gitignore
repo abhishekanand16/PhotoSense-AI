@@ -103,6 +103,18 @@ packaging/frontend/.build/
 packaging/*.dmg
 packaging/*.exe
 
+# Windows packaging
+packaging/windows/.venv/
+packaging/windows/.build/
+packaging/windows/build/
+packaging/windows/dist/
+
+# macOS packaging
+packaging/macos/.venv/
+packaging/macos/.build/
+packaging/macos/build/
+packaging/macos/dist/
+
 # FAISS index files
 *.index
 *_ids.pkl

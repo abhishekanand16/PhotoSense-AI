@@ -1,0 +1,146 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "PhotoSense-AI",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true,
+        "execute": false
+      },
+      "dialog": {
+        "all": true,
+        "open": true,
+        "save": true,
+        "message": true,
+        "ask": true
+      },
+      "fs": {
+        "all": true,
+        "readFile": true,
+        "writeFile": true,
+        "readDir": true,
+        "copyFile": true,
+        "createDir": true,
+        "removeDir": true,
+        "removeFile": true,
+        "renameFile": true,
+        "scope": [
+          "$APPDATA/**",
+          "$HOME/**",
+          "$RESOURCE/**",
+          "**"
+        ]
+      },
+      "path": {
+        "all": true
+      },
+      "protocol": {
+        "asset": true,
+        "assetScope": [
+          "$APPDATA/**",
+          "$HOME/**",
+          "$RESOURCE/**",
+          "**"
+        ]
+      },
+      "process": {
+        "all": true,
+        "relaunch": true,
+        "exit": true
+      },
+      "window": {
+        "all": true,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "maximize": true,
+        "minimize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "startDragging": true,
+        "setTitle": true,
+        "setSize": true,
+        "setPosition": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "Photography",
+      "copyright": "Copyright 2024-2026 PhotoSense-AI",
+      "externalBin": [],
+      "resources": [
+        "resources/backend/**"
+      ],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.photosense.ai",
+      "longDescription": "PhotoSense-AI is a privacy-focused desktop application that uses AI to automatically organize, tag, and search your photos. All processing happens locally on your device - your photos never leave your computer.",
+      "shortDescription": "AI-powered local photo organizer",
+      "targets": ["dmg"],
+      "macOS": {
+        "minimumSystemVersion": "11.0",
+        "exceptionDomain": "",
+        "signingIdentity": null,
+        "entitlements": null,
+        "frameworks": []
+      },
+      "deb": {
+        "depends": []
+      },
+      "dmg": {
+        "background": null,
+        "windowSize": {
+          "width": 600,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 420,
+          "y": 170
+        }
+      }
+    },
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost https://*.tile.openstreetmap.org https://unpkg.com data: blob:; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' https://unpkg.com; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 https://nominatim.openstreetmap.org; font-src 'self' data:"
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "PhotoSense-AI",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 650,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "maximized": false,
+        "visible": true,
+        "focus": true
+      }
+    ]
+  }
+}
