@@ -1,6 +1,14 @@
 # PhotoSense-AI
 
-Offline visual intelligence application for organizing and searching photos using computer vision and machine learning.
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://opensource.org/licenses/AGPL-3.0)
+[![GitHub](https://img.shields.io/badge/GitHub-abhishekanand16%2FPhotoSense--AI-181717?logo=github)](https://github.com/abhishekanand16/PhotoSense-AI)
+
+> **Offline visual intelligence application for organizing and searching photos using computer vision and machine learning.**
+
+**Author:** Abhishek Anand  
+**Repository:** [https://github.com/abhishekanand16/PhotoSense-AI](https://github.com/abhishekanand16/PhotoSense-AI)
+
+---
 
 ## Overview
 
@@ -184,7 +192,8 @@ PhotoSense-AI/
 │       │   └── styles/       # CSS/Tailwind styles
 │       └── src-tauri/        # Rust backend for Tauri
 ├── packaging/
-│   └── desktop-wrapper/      # PyInstaller + Tauri packaging wrapper
+│   └── windows/              # Windows installer scripts
+├── scripts/                  # Utility scripts
 ├── services/
 │   ├── api/                  # FastAPI service
 │   │   ├── routes/           # API route handlers
@@ -193,8 +202,11 @@ PhotoSense-AI/
 │   └── ml/                   # ML pipeline
 │       ├── detectors/        # Face and object detectors
 │       ├── embeddings/       # Face and image embedding models
-│       └── storage/          # SQLite and FAISS storage
+│       ├── storage/          # SQLite and FAISS storage
+│       └── utils/            # ML utilities
+├── docs/                     # Documentation
 ├── requirements.txt          # Python dependencies
+├── BUILD_MAC_APP.sh          # macOS build script
 └── README.md                 # This file
 ```
 
@@ -328,3 +340,11 @@ For third-party software licenses, see [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY
 - Processing large photo collections may take time
 - All data is stored locally—no cloud services used
 - Models are cached for faster subsequent runs
+
+---
+
+<p align="center">
+  <b>PhotoSense-AI</b> - Local AI-powered photo organization<br>
+  <a href="https://github.com/abhishekanand16/PhotoSense-AI">https://github.com/abhishekanand16/PhotoSense-AI</a><br>
+  <i>Copyright (c) 2026 Abhishek Anand. Licensed under AGPL-3.0.</i>
+</p>

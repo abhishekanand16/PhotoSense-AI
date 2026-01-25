@@ -1,3 +1,7 @@
+/**
+ * PhotoSense-AI - https://github.com/abhishekanand16/PhotoSense-AI
+ * Copyright (c) 2026 Abhishek Anand. Licensed under AGPL-3.0.
+ */
 import React, { useState, useEffect, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { MapPin, Globe, Loader2, ImageOff, ChevronRight, Info } from "lucide-react";

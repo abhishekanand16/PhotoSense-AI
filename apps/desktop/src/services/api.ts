@@ -1,3 +1,7 @@
+/**
+ * PhotoSense-AI - https://github.com/abhishekanand16/PhotoSense-AI
+ * Copyright (c) 2026 Abhishek Anand. Licensed under AGPL-3.0.
+ */
 import axios from "axios";
 
 const API_BASE_URL = "http://localhost:8000";

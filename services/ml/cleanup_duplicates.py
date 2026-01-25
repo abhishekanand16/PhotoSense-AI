@@ -1,3 +1,5 @@
+# PhotoSense-AI - https://github.com/abhishekanand16/PhotoSense-AI
+# Copyright (c) 2026 Abhishek Anand. Licensed under AGPL-3.0.
 import logging
 from collections import defaultdict
 from typing import Dict, List
