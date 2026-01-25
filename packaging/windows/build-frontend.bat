@@ -13,7 +13,7 @@ set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 for %%I in ("%SCRIPT_DIR%\..\.." ) do set "PROJECT_ROOT=%%~fI"
 set "DESKTOP_SRC=%PROJECT_ROOT%\apps\desktop"
-set "BACKEND_BUNDLE=%SCRIPT_DIR%\dist\backend\photosense-backend"
+set "BACKEND_BUNDLE=%SCRIPT_DIR%\dist\photosense-backend"
 set "BUILD_DIR=%SCRIPT_DIR%\.build"
 set "OUTPUT_DIR=%SCRIPT_DIR%\dist"
 
@@ -41,7 +41,9 @@ if not exist "%BACKEND_BUNDLE%\photosense-backend.exe" (
 )
 echo          Backend bundle: OK
 
-:: Check Node.js
+:: ============================================================
+:: Check and Install Node.js
+:: ============================================================
 set "NODE_EXE="
 set "NPM_EXE="
 
@@ -49,15 +51,59 @@ where node >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     set "NODE_EXE=node"
     for /f "tokens=*" %%V in ('node --version 2^>^&1') do echo          Node.js: %%V
-) else (
-    if exist "%ProgramFiles%\nodejs\node.exe" (
+    goto :node_found
+)
+
+:: Check common locations
+if exist "%ProgramFiles%\nodejs\node.exe" (
+    set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+    echo          Node.js: Found at !NODE_EXE!
+    goto :node_found
+)
+
+:: Node.js not found - install it
+echo          Node.js not found. Installing automatically...
+echo.
+
+:: Check if winget is available
+where winget >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    echo          Installing Node.js via winget...
+    winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+    if %ERRORLEVEL% equ 0 (
+        echo          Node.js installed successfully!
+        :: Refresh PATH
+        set "PATH=%ProgramFiles%\nodejs;%PATH%"
         set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
-        echo          Node.js: Found at !NODE_EXE!
+        goto :node_found
     ) else (
-        echo          ERROR: Node.js not found!
-        exit /b 1
+        echo          WARNING: winget install failed. Trying alternative...
     )
 )
+
+:: Try downloading directly
+echo          Downloading Node.js installer...
+set "NODE_INSTALLER=%TEMP%\node_installer.msi"
+curl -L -o "%NODE_INSTALLER%" "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" 2>nul
+if exist "%NODE_INSTALLER%" (
+    echo          Running Node.js installer (this may require admin)...
+    msiexec /i "%NODE_INSTALLER%" /quiet /norestart
+    timeout /t 5 >nul
+    del "%NODE_INSTALLER%" 2>nul
+    set "PATH=%ProgramFiles%\nodejs;%PATH%"
+    set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+    if exist "!NODE_EXE!" (
+        echo          Node.js installed successfully!
+        goto :node_found
+    )
+)
+
+echo          ERROR: Could not install Node.js automatically.
+echo          Please install manually from https://nodejs.org/
+pause
+exit /b 1
+
+:node_found
 
 :: Find npm
 where npm >nul 2>nul
@@ -72,19 +118,63 @@ if %ERRORLEVEL% equ 0 (
     )
 )
 
-:: Check Cargo
+:: ============================================================
+:: Check and Install Rust
+:: ============================================================
 where cargo >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     for /f "tokens=*" %%V in ('cargo --version 2^>^&1') do echo          Rust: %%V
-) else (
-    if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
+    goto :rust_found
+)
+
+:: Check user profile location
+if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
+    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+    echo          Rust: Found in user profile
+    goto :rust_found
+)
+
+:: Rust not found - install it
+echo          Rust not found. Installing automatically...
+echo.
+
+:: Check if winget is available
+where winget >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    echo          Installing Rust via winget...
+    winget install Rustlang.Rustup --accept-package-agreements --accept-source-agreements
+    if %ERRORLEVEL% equ 0 (
+        echo          Rust installed successfully!
+        :: Initialize rustup
+        "%USERPROFILE%\.cargo\bin\rustup.exe" default stable 2>nul
         set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
-        echo          Rust: Found in user profile
+        goto :rust_found
     ) else (
-        echo          ERROR: Rust/Cargo not found!
-        exit /b 1
+        echo          WARNING: winget install failed. Trying alternative...
     )
 )
+
+:: Try downloading rustup-init directly
+echo          Downloading Rust installer...
+set "RUSTUP_INIT=%TEMP%\rustup-init.exe"
+curl -L -o "%RUSTUP_INIT%" "https://win.rustup.rs/x86_64" 2>nul
+if exist "%RUSTUP_INIT%" (
+    echo          Running Rust installer...
+    "%RUSTUP_INIT%" -y --default-toolchain stable 2>nul
+    del "%RUSTUP_INIT%" 2>nul
+    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+    if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
+        echo          Rust installed successfully!
+        goto :rust_found
+    )
+)
+
+echo          ERROR: Could not install Rust automatically.
+echo          Please install manually from https://rustup.rs/
+pause
+exit /b 1
+
+:rust_found
 
 echo          All prerequisites OK!
 

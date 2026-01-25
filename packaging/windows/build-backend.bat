@@ -4,6 +4,7 @@ setlocal enabledelayedexpansion
 :: ============================================================
 :: Build PhotoSense-AI Backend for Windows
 :: Creates a standalone executable using PyInstaller
+:: Automatically installs Python if missing.
 :: ============================================================
 
 title PhotoSense-AI Backend Build
@@ -25,7 +26,7 @@ echo   Output Dir:   %OUTPUT_DIR%
 echo.
 
 :: ============================================================
-:: Step 1: Find Python
+:: Step 1: Find or Install Python
 :: ============================================================
 echo   [1/6] Finding Python...
 
@@ -57,8 +58,41 @@ for %%P in (
     )
 )
 
-echo          ERROR: Python not found!
-echo          Please install Python 3.10+ from https://www.python.org/downloads/
+:: Python not found - install it
+echo          Python not found. Installing automatically...
+echo.
+
+where winget >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    echo          Installing Python via winget...
+    winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+    if %ERRORLEVEL% equ 0 (
+        echo          Python installed successfully!
+        set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+        set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+        goto :found_python
+    )
+)
+
+:: Try downloading installer
+echo          Downloading Python installer...
+set "PY_INSTALLER=%TEMP%\python_installer.exe"
+curl -L -o "%PY_INSTALLER%" "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe" 2>nul
+if exist "%PY_INSTALLER%" (
+    echo          Running Python installer...
+    "%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
+    timeout /t 10 >nul
+    del "%PY_INSTALLER%" 2>nul
+    set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+    if exist "!PYTHON_EXE!" (
+        echo          Python installed successfully!
+        goto :found_python
+    )
+)
+
+echo          ERROR: Could not install Python automatically.
+echo          Please install from https://www.python.org/downloads/
 pause
 exit /b 1
 

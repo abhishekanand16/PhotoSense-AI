@@ -5,6 +5,7 @@ setlocal enabledelayedexpansion
 :: PhotoSense-AI Windows Installer Builder
 :: ============================================================
 :: Double-click this file to build the Windows installer.
+:: Automatically installs missing prerequisites.
 :: ============================================================
 
 title PhotoSense-AI Installer Builder
@@ -30,116 +31,207 @@ echo   Project: %PROJECT_ROOT%
 echo.
 
 :: ============================================================
-:: Check Prerequisites
+:: Check and Install Prerequisites
 :: ============================================================
 echo   ================================================================
 echo   CHECKING PREREQUISITES
 echo   ================================================================
 echo.
 
-set "ALL_OK=1"
-set "PYTHON_EXE="
-set "NODE_EXE="
-set "CARGO_EXE="
-
-:: Check Python
+:: ============================================================
+:: Check/Install Python
+:: ============================================================
 echo   [1/3] Python 3.10+...
+set "PYTHON_EXE="
+
 where python >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     for /f "tokens=2" %%V in ('python --version 2^>^&1') do set "PY_VER=%%V"
     echo          Found: Python !PY_VER!
     set "PYTHON_EXE=python"
-) else (
-    :: Check common locations
-    if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
-        set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    goto :python_found
+)
+
+:: Check common locations
+for %%P in (
+    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+    "C:\Python313\python.exe"
+    "C:\Python312\python.exe"
+    "C:\Python311\python.exe"
+    "C:\Python310\python.exe"
+) do (
+    if exist %%P (
+        set "PYTHON_EXE=%%~P"
         echo          Found: !PYTHON_EXE!
-    ) else if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" (
-        set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
-        echo          Found: !PYTHON_EXE!
-    ) else if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" (
-        set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
-        echo          Found: !PYTHON_EXE!
-    ) else if exist "C:\Python312\python.exe" (
-        set "PYTHON_EXE=C:\Python312\python.exe"
-        echo          Found: !PYTHON_EXE!
-    ) else if exist "C:\Python311\python.exe" (
-        set "PYTHON_EXE=C:\Python311\python.exe"
-        echo          Found: !PYTHON_EXE!
-    ) else (
-        echo          NOT FOUND
-        set "ALL_OK=0"
+        goto :python_found
     )
 )
 
-:: Check Node.js
+:: Python not found - install it
+echo          Python not found. Installing automatically...
+echo.
+
+where winget >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    echo          Installing Python via winget...
+    winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+    if %ERRORLEVEL% equ 0 (
+        echo          Python installed successfully!
+        set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+        set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+        goto :python_found
+    )
+)
+
+:: Try downloading installer
+echo          Downloading Python installer...
+set "PY_INSTALLER=%TEMP%\python_installer.exe"
+curl -L -o "%PY_INSTALLER%" "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe" 2>nul
+if exist "%PY_INSTALLER%" (
+    echo          Running Python installer...
+    "%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
+    timeout /t 10 >nul
+    del "%PY_INSTALLER%" 2>nul
+    set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+    if exist "!PYTHON_EXE!" (
+        echo          Python installed successfully!
+        goto :python_found
+    )
+)
+
+echo          ERROR: Could not install Python automatically.
+echo          Please install from https://www.python.org/downloads/
+pause
+exit /b 1
+
+:python_found
+
+:: ============================================================
+:: Check/Install Node.js
+:: ============================================================
 echo   [2/3] Node.js 18+...
+set "NODE_EXE="
+
 where node >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     for /f "tokens=1" %%V in ('node --version 2^>^&1') do set "NODE_VER=%%V"
     echo          Found: Node.js !NODE_VER!
     set "NODE_EXE=node"
-) else (
-    if exist "%ProgramFiles%\nodejs\node.exe" (
+    goto :node_found
+)
+
+if exist "%ProgramFiles%\nodejs\node.exe" (
+    set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+    echo          Found: !NODE_EXE!
+    goto :node_found
+)
+
+:: Node.js not found - install it
+echo          Node.js not found. Installing automatically...
+echo.
+
+where winget >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    echo          Installing Node.js via winget...
+    winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+    if %ERRORLEVEL% equ 0 (
+        echo          Node.js installed successfully!
         set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
-        echo          Found: !NODE_EXE!
-    ) else (
-        echo          NOT FOUND
-        set "ALL_OK=0"
+        set "PATH=%ProgramFiles%\nodejs;%PATH%"
+        goto :node_found
     )
 )
 
-:: Check Rust/Cargo
+:: Try downloading installer
+echo          Downloading Node.js installer...
+set "NODE_INSTALLER=%TEMP%\node_installer.msi"
+curl -L -o "%NODE_INSTALLER%" "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" 2>nul
+if exist "%NODE_INSTALLER%" (
+    echo          Running Node.js installer...
+    msiexec /i "%NODE_INSTALLER%" /quiet /norestart
+    timeout /t 5 >nul
+    del "%NODE_INSTALLER%" 2>nul
+    set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+    set "PATH=%ProgramFiles%\nodejs;%PATH%"
+    if exist "!NODE_EXE!" (
+        echo          Node.js installed successfully!
+        goto :node_found
+    )
+)
+
+echo          ERROR: Could not install Node.js automatically.
+echo          Please install from https://nodejs.org/
+pause
+exit /b 1
+
+:node_found
+
+:: ============================================================
+:: Check/Install Rust
+:: ============================================================
 echo   [3/3] Rust (cargo)...
+set "CARGO_EXE="
+
 where cargo >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     for /f "tokens=1,2" %%A in ('cargo --version 2^>^&1') do set "CARGO_VER=%%A %%B"
     echo          Found: !CARGO_VER!
     set "CARGO_EXE=cargo"
-) else (
-    if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
-        set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
-        echo          Found: !CARGO_EXE!
-    ) else (
-        echo          NOT FOUND
-        set "ALL_OK=0"
-    )
+    goto :rust_found
 )
 
+if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
+    set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
+    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+    echo          Found: !CARGO_EXE!
+    goto :rust_found
+)
+
+:: Rust not found - install it
+echo          Rust not found. Installing automatically...
 echo.
 
-:: Handle missing prerequisites
-if "%ALL_OK%"=="0" (
-    echo   ================================================================
-    echo   MISSING PREREQUISITES
-    echo   ================================================================
-    echo.
-    echo   Please install the missing tools:
-    echo.
-    if "%PYTHON_EXE%"=="" (
-        echo   - Python 3.10+
-        echo     Download: https://www.python.org/downloads/
-        echo     Or run:   winget install Python.Python.3.12
-        echo.
+where winget >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    echo          Installing Rust via winget...
+    winget install Rustlang.Rustup --accept-package-agreements --accept-source-agreements
+    if %ERRORLEVEL% equ 0 (
+        echo          Rust installed successfully!
+        "%USERPROFILE%\.cargo\bin\rustup.exe" default stable 2>nul
+        set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
+        set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+        goto :rust_found
     )
-    if "%NODE_EXE%"=="" (
-        echo   - Node.js 18+
-        echo     Download: https://nodejs.org/
-        echo     Or run:   winget install OpenJS.NodeJS.LTS
-        echo.
-    )
-    if "%CARGO_EXE%"=="" (
-        echo   - Rust
-        echo     Download: https://rustup.rs/
-        echo     Or run:   winget install Rustlang.Rustup
-        echo.
-    )
-    echo   After installing, restart this script.
-    echo.
-    pause
-    exit /b 1
 )
 
+:: Try downloading rustup-init directly
+echo          Downloading Rust installer...
+set "RUSTUP_INIT=%TEMP%\rustup-init.exe"
+curl -L -o "%RUSTUP_INIT%" "https://win.rustup.rs/x86_64" 2>nul
+if exist "%RUSTUP_INIT%" (
+    echo          Running Rust installer...
+    "%RUSTUP_INIT%" -y --default-toolchain stable 2>nul
+    del "%RUSTUP_INIT%" 2>nul
+    set "CARGO_EXE=%USERPROFILE%\.cargo\bin\cargo.exe"
+    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+    if exist "!CARGO_EXE!" (
+        echo          Rust installed successfully!
+        goto :rust_found
+    )
+)
+
+echo          ERROR: Could not install Rust automatically.
+echo          Please install from https://rustup.rs/
+pause
+exit /b 1
+
+:rust_found
+
+echo.
 echo   All prerequisites OK!
 echo.
 
