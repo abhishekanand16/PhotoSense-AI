@@ -250,8 +250,9 @@ export const scanApi = {
     return response.data;
   },
   getGlobalStatus: async (): Promise<GlobalScanStatus> => {
-    // Use shorter timeout for status polling to avoid blocking UI
-    const response = await api.get<GlobalScanStatus>("/scan/status", { timeout: 5000 });
+    // Use longer timeout for status polling to avoid false disconnections during search operations
+    // Search operations can take 5-6 seconds, so status polls need more time
+    const response = await api.get<GlobalScanStatus>("/scan/status", { timeout: 10000 });
     return response.data;
   },
   scanFaces: async (): Promise<ScanJob> => {

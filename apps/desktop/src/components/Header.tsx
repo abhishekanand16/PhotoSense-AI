@@ -89,7 +89,7 @@ const Header: React.FC<HeaderProps> = ({ onSearch, onOpenSettings }) => {
         }
         lastStatusRef.current = status.status;
         lastPhaseRef.current = status.phase;
-      } catch {
+      } catch (error) {
         consecutiveFailures.current += 1;
         
         // If we had an active scan and this is just a temporary timeout (< 3 consecutive failures),
