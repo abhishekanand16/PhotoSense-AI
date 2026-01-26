@@ -77,10 +77,15 @@ a = Analysis(
         # Image Processing
         "PIL", "PIL.Image", "PIL.ExifTags", "PIL.ImageOps", "cv2",
         
+        # SciPy (Required by scikit-learn)
+        "scipy", "scipy.sparse", "scipy.sparse.csgraph", "scipy.sparse.linalg",
+        "scipy.spatial", "scipy.spatial.distance",
+        
         # Scikit-learn (Clustering)
         "sklearn", "sklearn.cluster", "sklearn.cluster._dbscan", "sklearn.cluster._kmeans",
         "sklearn.metrics", "sklearn.metrics.pairwise", "sklearn.neighbors",
         "sklearn.preprocessing", "sklearn.utils", "sklearn.utils._cython_blas",
+        "sklearn.neighbors._partition_nodes",
         
         # FAISS (Vector Search)
         "faiss", "faiss.swigfaiss",
@@ -100,6 +105,10 @@ a = Analysis(
         # InsightFace (Face Detection)
         "insightface", "insightface.app", "insightface.app.face_analysis",
         "insightface.model_zoo", "insightface.model_zoo.model_zoo", "insightface.utils",
+        "insightface.thirdparty", "insightface.thirdparty.face3d",
+        
+        # Matplotlib (Required by InsightFace's face3d)
+        "matplotlib", "matplotlib.pyplot",
         
         # ONNX Runtime
         "onnxruntime", "onnx", "onnx.numpy_helper",
@@ -142,7 +151,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # Exclude unnecessary modules to reduce size
-        "tkinter", "matplotlib", "matplotlib.pyplot", "notebook", "jupyter",
+        "tkinter", "notebook", "jupyter",
         "jupyter_client", "jupyter_core", "IPython", "ipykernel", "pytest",
         "sphinx", "docutils", "setuptools", "pip", "wheel",
         # Exclude TensorFlow (we use PyTorch)
