@@ -94,9 +94,17 @@ if %ERRORLEVEL% neq 0 (
         "%VENV_PIP%" install insightface --no-cache-dir
         if !ERRORLEVEL! neq 0 (
             echo.
-            echo   ERROR: InsightFace installation failed due to permissions
-            echo   Please run this script as Administrator:
-            echo   Right-click install.bat ^> "Run as administrator"
+            echo   ERROR: InsightFace installation failed
+            echo   This requires Microsoft Visual C++ 14.0 or greater.
+            echo.
+            echo   Please install Visual Studio Build Tools:
+            echo   1. Download from: https://aka.ms/vs/17/release/vs_BuildTools.exe
+            echo   2. Run the installer
+            echo   3. Select "Desktop development with C++"
+            echo   4. Wait for installation to complete
+            echo   5. Restart this terminal and run install.bat again
+            echo.
+            echo   Or use install.bat which installs Build Tools automatically.
             exit /b 1
         )
     )
